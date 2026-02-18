@@ -403,6 +403,60 @@ body.dark-mode .primary-outline:hover { background: #3b82f6; }
 
 .full-width { width: 100%; }
 
+/* --- EXPORT DROPDOWN MENU --- */
+.export-dropdown-container {
+  position: relative;
+  display: inline-block;
+  outline: none; /* Removes outline when tabbed/clicked */
+}
+
+.export-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 8px;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+  display: flex;
+  flex-direction: column;
+  min-width: 170px;
+  z-index: 1000; /* Keeps it above the map and dashboard */
+  overflow: hidden;
+}
+
+body.dark-mode .export-menu {
+  box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+}
+
+.export-menu button {
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border-color);
+  padding: 12px 16px;
+  text-align: left;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  font-family: inherit;
+}
+
+.export-menu button:last-child {
+  border-bottom: none;
+}
+
+.export-menu button:hover {
+  background-color: var(--bg-hover);
+  color: #001f5f; /* Globe Blue accent on hover */
+}
+
+body.dark-mode .export-menu button:hover {
+  color: #3b82f6; /* Lighter blue in dark mode */
+}
+
 /* =========================================
    7. BIG MAP MODAL (POP-UP)
    ========================================= */
