@@ -171,9 +171,11 @@ function App() {
   const [filterStatus, setFilterStatus] = useState('ALL');
   const [searchTerm, setSearchTerm] = useState("");
   
-  // FIX: Updated Default Coordinates to Panabo area
   const [selectedSite, setSelectedSite] = useState({ lat: 7.0588, lng: 125.5786 });
   const [showBigMap, setShowBigMap] = useState(false);
+
+  // --- NEW: Export Menu Toggle State ---
+  const [showExportMenu, setShowExportMenu] = useState(false);
 
   // 2. EFFECTS
   useEffect(() => {
@@ -189,33 +191,32 @@ function App() {
     setIsDarkMode(prev => !prev);
   };
 
-  // Determine which logo to use
   const currentLogo = isDarkMode ? globeLogoDark : globeLogoLight;
 
   const filteredResults = results.filter(row => {
-  const term = searchTerm.toLowerCase();
+    const term = searchTerm.toLowerCase();
 
-  const matchesSearch = [
-    row.PLA_ID,
-    row.PROVINCE,
-    row.MUNICIPALITY,
-    row.REGION,
-    row.BARANGAY,
-    row["UDM Name"],
-    row["NMS Name"]
-  ]
-    .filter(Boolean)
-    .some(value =>
-      value.toString().toLowerCase().includes(term)
-    );
+    const matchesSearch = [
+      row.PLA_ID,
+      row.PROVINCE,
+      row.MUNICIPALITY,
+      row.REGION,
+      row.BARANGAY,
+      row["UDM Name"],
+      row["NMS Name"]
+    ]
+      .filter(Boolean)
+      .some(value =>
+        value.toString().toLowerCase().includes(term)
+      );
 
-  const matchesStatus =
-    filterStatus === 'ALL'
-      ? true
-      : row.Status === filterStatus;
+    const matchesStatus =
+      filterStatus === 'ALL'
+        ? true
+        : row.Status === filterStatus;
 
-  return matchesSearch && matchesStatus;
-});
+    return matchesSearch && matchesStatus;
+  });
 
   const readFileAsText = (file) => {
     return new Promise((resolve, reject) => {
@@ -226,13 +227,27 @@ function App() {
     });
   };
 
-  const handleExport = () => {
+  // --- UPDATED: Specific Export Logic ---
+  const handleSpecificExport = (exportCategory) => {
+    setShowExportMenu(false); // Close the dropdown menu
+
     if (results.length === 0) {
       alert("No data to export. Please run a scan first.");
       return;
     }
+
+    // Filter the raw results based on the button clicked in the dropdown
+    const dataToExport = exportCategory === 'ALL' 
+      ? results 
+      : results.filter(row => row.Status === exportCategory);
+
+    if (dataToExport.length === 0) {
+      alert(`There are no "${exportCategory}" sites to export.`);
+      return;
+    }
+
     const headers = ["PLA_ID", "Status", "NMS Name", "UDM Name", "Latitude", "Longitude"];
-    const rows = filteredResults.map(row => [
+    const rows = dataToExport.map(row => [
       row.PLA_ID,
       row.Status,
       `"${row["NMS Name"] || ""}"`, 
@@ -240,12 +255,17 @@ function App() {
       row.Lat,
       row.Lng
     ].join(","));
+    
     const csvContent = [headers.join(","), ...rows].join("\n");
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `network_report_${filterStatus.toLowerCase().replace(' ', '_')}.csv`;
+    
+    // Name the file intelligently based on what they exported
+    const fileNameStatus = exportCategory === 'ALL' ? 'All_Sites' : exportCategory.replace(/\s+/g, '_');
+    link.download = `network_report_${fileNameStatus}.csv`;
+    
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -265,7 +285,6 @@ function App() {
       const text2 = await readFileAsText(monitorFile2);
 
       setTimeout(() => {
-        // CHECK IF RUNNING IN APPS SCRIPT OR LOCAL MOCK
         if (window.google && window.google.script) {
            window.google.script.run
              .withSuccessHandler((resRaw) => {
@@ -284,18 +303,18 @@ function App() {
              })
              .processCSVComparison(text1, text2);
         } else {
-           // --- LOCAL DEV MODE MOCK DATA ---
            console.log("Local Mode: Generating Mock Data");
            const mockData = [
              { PLA_ID: "DVO_0172", Status: "NAME MISMATCH", "NMS Name": "Site_A_Old", "UDM Name": "Site_A_New", Lat: 7.17085, Lng: 125.41559 },
              { PLA_ID: "DVO_0177", Status: "NEW SITE", "NMS Name": "", "UDM Name": "Site_B_New", Lat: 7.01811, Lng: 125.61018 },
              { PLA_ID: "DVO_0179", Status: "REMOVED SITE", "NMS Name": "Site_C_Old", "UDM Name": "", Lat: 7.30454, Lng: 125.43193 },
              { PLA_ID: "DVO_0203", Status: "NAME MISMATCH", "NMS Name": "Site_D_Old", "UDM Name": "Site_D_New", Lat: 7.20092, Lng: 125.54526 },
+             { PLA_ID: "DVO_0210", Status: "UNCHANGED", "NMS Name": "Site_E_Perfect", "UDM Name": "Site_E_Perfect", Lat: 7.21092, Lng: 125.56526 },
            ];
            for(let i=0; i<50; i++) {
              mockData.push({ 
                PLA_ID: `DVO_TEST_${i}`, 
-               Status: i % 3 === 0 ? "NEW SITE" : "NAME MISMATCH", 
+               Status: i % 4 === 0 ? "UNCHANGED" : i % 3 === 0 ? "NEW SITE" : "NAME MISMATCH", 
                "NMS Name": `Site_${i}_Old`, 
                "UDM Name": `Site_${i}_New`, 
                Lat: 7.0 + (Math.random() * 0.5), 
@@ -316,12 +335,10 @@ function App() {
   // 4. RENDER (RETURN JSX)
   return (
     <div className="app-container">
-      {/* Pass current logo to LoadingScreen */}
       {isLoading && <LoadingScreen logo={currentLogo} />}
 
       <header className="top-bar">
         <div className="logo-section">
-          {/* Use currentLogo for dynamic switching */}
           <img className="globe-logo" src={currentLogo} alt="Globe Logo" />
         </div>
         
@@ -334,7 +351,37 @@ function App() {
             {isDarkMode ? "☀️ Light" : "🌙 Dark"}
           </button>
 
-          <button className="btn primary-outline" onClick={handleExport}>Export View</button>
+          {/* --- NEW: DROPDOWN EXPORT MENU --- */}
+          {/* Note: tabIndex and onBlur help close the menu if the user clicks somewhere else */}
+          <div 
+            className="export-dropdown-container" 
+            onBlur={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget)) {
+                setShowExportMenu(false);
+              }
+            }}
+            tabIndex={-1}
+          >
+            <button 
+              className="btn primary-outline export-toggle-btn" 
+              onClick={() => setShowExportMenu(!showExportMenu)}
+            >
+              Export Data ▾
+            </button>
+            
+            {showExportMenu && (
+              <div className="export-menu">
+                <button onClick={() => handleSpecificExport('ALL')}>Storm Materlist</button>
+                <button onClick={() => handleSpecificExport('ALL')}>Updates Only</button>
+                <button onClick={() => handleSpecificExport('NEW SITE')}>New Sites Only</button>
+                <button onClick={() => handleSpecificExport('REMOVED SITE')}>Removed Only</button>
+                <button onClick={() => handleSpecificExport('NAME MISMATCH')}>Mismatches Only</button>
+                <button onClick={() => handleSpecificExport('UNCHANGED')}>Unchanged Only</button>
+              </div>
+            )}
+          </div>
+          {/* --- END DROPDOWN --- */}
+
         </div>
       </header>
 
@@ -367,7 +414,6 @@ function App() {
               <button className="expand-btn" onClick={() => setShowBigMap(true)} title="Expand Map">⤢</button>
             </div>
             <div className="mini-map">
-              {/* FIX: Removed conditional URL. Now uses standard colorful map always. */}
               <MapContainer center={[selectedSite.lat, selectedSite.lng]} zoom={10} zoomControl={false}>
                 <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
                 <MapRecenter lat={selectedSite.lat} lng={selectedSite.lng} />
@@ -469,7 +515,6 @@ function App() {
               <button className="close-btn" onClick={() => setShowBigMap(false)}>✖ Close</button>
             </div>
             <div className="big-map-wrapper">
-              {/* FIX: Updated Big Map to use original colorful tiles as well */}
               <MapContainer center={[selectedSite.lat, selectedSite.lng]} zoom={15} style={{ height: "100%", width: "100%" }}>
                 <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
                 <MapRecenter lat={selectedSite.lat} lng={selectedSite.lng} />
