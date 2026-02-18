@@ -1,0 +1,637 @@
+/* =========================================
+   0. THEME VARIABLES (SYSTEM DEPENDENT)
+   ========================================= */
+:root {
+  /* --- DEFAULT (LIGHT MODE) --- */
+  --bg-app: #ffffff;
+  --bg-sidebar: #001f5f;         /* Globe Blue */
+  --bg-content: #f4f6f8;         /* Light Grey */
+  --bg-card: #ffffff;
+  --bg-input: #ffffff;
+  --bg-hover: #f2f7ff;
+  --bg-active: #e8f0fe;
+  
+  --text-primary: #333333;
+  --text-secondary: #666666;
+  --text-inverse: #ffffff;       /* White text on dark sidebar */
+  --text-sidebar-muted: rgba(255,255,255,0.7);
+  
+  --border-color: #dee2e6;
+  --border-light: #e0e0e0;
+  
+  --shadow-card: 0 2px 10px rgba(0,0,0,0.05);
+  --map-filter: none;            /* Normal Map Colors */
+}
+
+/* --- DARK MODE OVERRIDES --- */
+body.dark-mode {
+  --bg-app: #111827;             /* Dark Background */
+  --bg-sidebar: #0f172a;         /* Darker Blue/Black */
+  --bg-content: #1f2937;         /* Dark Grey Content Area */
+  --bg-card: #374151;            /* Dark Grey Cards */
+  --bg-input: #1f2937;
+  --bg-hover: #4b5563;           /* Darker Hover */
+  --bg-active: #3b82f6;          /* Blue Active State */
+
+  --text-primary: #f3f4f6;       /* White Text */
+  --text-secondary: #9ca3af;     /* Muted Grey */
+  --text-inverse: #f3f4f6;
+  --text-sidebar-muted: rgba(255,255,255,0.6);
+
+  --border-color: #4b5563;
+  --border-light: #374151;
+
+  --shadow-card: 0 4px 6px rgba(0,0,0,0.3);
+  /* Dims the map slightly so it doesn't blind you in dark mode */
+  --map-filter: brightness(0.8) invert(1) hue-rotate(180deg);
+}
+
+/* =========================================
+   1. MAIN LAYOUT & HEADER
+   ========================================= */
+body {
+  margin: 0;
+  background-color: var(--bg-app);
+  color: var(--text-primary);
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.app-container {
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-app);
+}
+
+.top-bar {
+  height: 70px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 2rem;
+  background-color: var(--bg-card); /* Changed to var */
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+
+.globe-logo {
+  height: 70px !important;
+  width: auto !important;
+  display: block;
+}
+
+.main-layout {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* =========================================
+   2. SIDEBAR & INPUTS
+   ========================================= */
+.sidebar {
+  width: 300px;
+  background-color: var(--bg-sidebar); /* Changed to var */
+  color: var(--text-inverse);
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+  overflow-y: auto;
+  border-right: 1px solid var(--border-color); /* Added border for dark mode definition */
+}
+
+.upload-group {
+  margin-bottom: 1rem;
+}
+
+.input-label {
+  display: block;
+  font-size: 0.8rem;
+  margin-bottom: 5px;
+  color: var(--text-sidebar-muted);
+}
+
+.file-drop-area {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px;
+  border: 1px dashed rgba(255,255,255,0.4);
+  border-radius: 6px;
+  transition: 0.2s;
+  background: rgba(255,255,255,0.05);
+  overflow: hidden;
+}
+
+.file-drop-area:hover {
+  background: rgba(255,255,255,0.1);
+  border-color: rgba(255,255,255,0.8);
+}
+
+.file-msg {
+  font-size: 0.8rem;
+  color: rgba(255,255,255,0.8);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 90%;
+}
+
+.file-input {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  width: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+/* =========================================
+   3. SIDEBAR MAP (MINI)
+   ========================================= */
+.sidebar-map-container {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.map-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.map-header-row h4 {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-sidebar-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.expand-btn {
+  background: none;
+  border: 1px solid rgba(255,255,255,0.3);
+  color: white;
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0 6px;
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.expand-btn:hover {
+  background: rgba(255,255,255,0.2);
+}
+
+.mini-map {
+  height: 250px !important;
+  width: 100%;
+  border-radius: 12px;
+  border: 2px solid rgba(255,255,255,0.2);
+  box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+  z-index: 1;
+  overflow: hidden;
+}
+
+/* DARK MODE MAP FILTER */
+.leaflet-container {
+  height: 100% !important;
+  width: 100% !important;
+  filter: var(--map-filter); /* Applies dark mode filter */
+}
+
+/* =========================================
+   4. CONTENT AREA & OUTPUT
+   ========================================= */
+.content-area {
+  flex: 1;
+  padding: 2rem;
+  background-color: var(--bg-content); /* Changed to var */
+  overflow: hidden;
+}
+
+.output-card {
+  background: var(--bg-card); /* Changed to var */
+  border-radius: 8px;
+  box-shadow: var(--shadow-card);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-color); /* Added border */
+}
+
+/* --- SEARCH BAR STYLING --- */
+.search-bar {
+  padding: 6px 12px;
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-input) !important; /* Changed to var */
+  color: var(--text-primary);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  width: 250px;
+  outline: none;
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.05);
+  transition: border-color 0.2s;
+}
+
+.search-bar:focus {
+  border-color: #001f5f;
+  box-shadow: 0 0 0 2px rgba(0, 31, 95, 0.2);
+}
+
+/* =========================================
+   5. TABLE TOOLBAR & GRID
+   ========================================= */
+.table-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.8rem 1.5rem;
+  background-color: var(--bg-content); /* Match content bg */
+  border-bottom: 1px solid var(--border-color);
+  border-top: 1px solid var(--border-color);
+}
+
+.table-label {
+  font-weight: 600;
+  color: var(--text-primary); /* Changed to var */
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.output-box {
+  display: block !important;
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  border-top: none;
+}
+
+.table-wrapper {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  background-color: var(--bg-card);
+}
+
+.result-table {
+  width: 100% !important;
+  border-collapse: collapse !important;
+  font-family: 'Segoe UI', sans-serif;
+  border: 1px solid var(--border-color);
+}
+
+.result-table th {
+  background: var(--bg-content); /* Changed to var */
+  padding: 12px;
+  text-align: left;
+  border: 1px solid var(--border-color);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  box-shadow: 0 2px 2px -1px rgba(0, 0, 0, 0.1);
+}
+
+.result-table td {
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.row-hover:hover {
+  background-color: var(--bg-hover) !important; /* Changed to var */
+  cursor: pointer;
+}
+
+.active-row {
+  background-color: var(--bg-active) !important; /* Changed to var */
+  color: white !important; /* Ensure text is readable on active */
+  outline: 2px solid #1a73e8;
+  outline-offset: -2px;
+}
+
+.font-bold { font-weight: 600; color: #1a73e8; }
+.coord-text { font-family: 'Courier New', monospace; color: var(--text-secondary); }
+
+.status-badge {
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.new-site { background: #d4edda; color: #155724; }
+.removed-site { background: #f8d7da; color: #721c24; }
+.name-mismatch { background: #fff3cd; color: #856404; }
+.unchanged { background: #5e5e5d; color: #ffffff; }
+
+.placeholder-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-secondary);
+}
+
+/* =========================================
+   6. GLOBAL BUTTONS
+   ========================================= */
+
+/* --- THEME TOGGLE BUTTON --- */
+.theme-toggle {
+  background-color: transparent;
+  border: 1px solid var(--border-color); /* Subtle border */
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.theme-toggle:hover {
+  background-color: var(--bg-hover);
+  border-color: #001f5f; /* Globe Blue highlight on hover */
+}
+
+/* Dark mode specific hover */
+body.dark-mode .theme-toggle:hover {
+  border-color: #3b82f6;
+  background-color: rgba(59, 130, 246, 0.1);
+}
+
+.btn {
+  padding: 0.6rem 1.2rem;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: none;
+}
+
+.primary-filled { background-color: white; color: #001f5f; }
+.primary-filled:hover { background-color: #e6e6e6; }
+
+.primary-outline { 
+  border: 2px solid #001f5f; 
+  background: transparent; 
+  color: #001f5f; 
+}
+/* Dark Mode fix for outline button */
+body.dark-mode .primary-outline {
+  border-color: #3b82f6;
+  color: #3b82f6;
+}
+
+.primary-outline:hover { background: #001f5f; color: white; }
+body.dark-mode .primary-outline:hover { background: #3b82f6; }
+
+.full-width { width: 100%; }
+
+/* =========================================
+   7. BIG MAP MODAL (POP-UP)
+   ========================================= */
+.map-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: rgba(0, 0, 0, 0.6);
+  z-index: 9999;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.map-modal-content {
+  background: var(--bg-card); /* Changed to var */
+  width: 85vw;
+  height: 85vh;
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  border: 1px solid var(--border-color);
+}
+
+.map-modal-header {
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.map-modal-header h3 {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.close-btn {
+  background: #ff4d4d;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+.close-btn:hover {
+  background: #d93636;
+}
+
+.big-map-wrapper {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* =========================================
+   8. COMPACT ANALYTICS 
+   ========================================= */
+.dashboard-container {
+  display: flex;
+  gap: 1rem;
+  padding: 1rem 1.5rem;
+  background-color: var(--bg-card); /* Changed to var */
+  border-bottom: 1px solid var(--border-color);
+  align-items: stretch;
+  flex-shrink: 0;
+}
+
+/* Left: Chart Area */
+.chart-section {
+  flex: 0 0 250px;
+  background: var(--bg-card);
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.chart-title {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  margin-bottom: 5px;
+}
+
+/* Right: Stats Cards Area */
+.cards-section {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 1rem;
+}
+
+.stat-card {
+  background: var(--bg-card); /* Changed to var */
+  padding: 0.8rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+}
+
+.stat-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  margin-bottom: 0.3rem;
+  text-align: center;
+}
+
+.stat-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+/* Color accents - Keep these as specific colors */
+.stat-card.new { border-bottom: 4px solid #28a745; }
+.stat-card.removed { border-bottom: 4px solid #dc3545; }
+.stat-card.mismatch { border-bottom: 4px solid #ffc107; }
+.stat-card.total { border-bottom: 4px solid #001f5f; }
+.stat-card.unchanged { border-bottom: 4px solid #092e52; }
+body.dark-mode .stat-card.total { border-bottom-color: #3b82f6; } /* Adjust blue in dark mode */
+
+/* =========================================
+   9. LOADING OVERLAY (Globe Style)
+   ========================================= */
+.loading-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: var(--bg-app); /* Adapts to theme */
+  opacity: 0.95;
+  backdrop-filter: blur(5px);
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.spinner-box {
+  position: relative;
+  width: 120px;
+  height: 120px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.loading-logo {
+  width: 60px;
+  height: auto;
+  z-index: 2;
+  animation: logo-pulse 2s infinite ease-in-out;
+}
+
+.spinner-ring {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  border: 4px solid transparent;
+  border-top-color: #001f5f;
+  border-right-color: #26a9e0;
+  animation: spin 1s linear infinite;
+}
+/* Adjust spinner color for dark mode visibility */
+body.dark-mode .spinner-ring {
+  border-top-color: #3b82f6;
+  border-right-color: #06b6d4;
+}
+
+.spinner-ripple {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  border: 2px solid rgba(0, 31, 95, 0.2);
+  animation: ripple 1.5s linear infinite;
+}
+body.dark-mode .spinner-ripple {
+  border-color: rgba(59, 130, 246, 0.3);
+}
+
+.loading-text {
+  margin-top: 2rem;
+  font-family: 'Segoe UI', sans-serif;
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 1.2rem;
+  letter-spacing: 0.5px;
+  animation: fadeText 2s infinite;
+}
+
+/* --- ANIMATIONS --- */
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes logo-pulse {
+  0% { transform: scale(0.9); opacity: 0.8; }
+  50% { transform: scale(1.05); opacity: 1; }
+  100% { transform: scale(0.9); opacity: 0.8; }
+}
+
+@keyframes ripple {
+  0% { transform: scale(1); opacity: 1; }
+  100% { transform: scale(1.5); opacity: 0; }
+}
+
+@keyframes fadeText {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
