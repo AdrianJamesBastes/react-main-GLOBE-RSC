@@ -170,8 +170,9 @@ function App() {
 
   const [filterStatus, setFilterStatus] = useState('ALL');
   const [searchTerm, setSearchTerm] = useState("");
-  
-  const [selectedSite, setSelectedSite] = useState({ lat: 7.0588, lng: 125.5786 });
+
+  // FIX: Updated Default Coordinates to Panabo area
+  const [selectedSite, setSelectedSite] = useState({ lat: 7.05565, lng: 125.54682 });
   const [showBigMap, setShowBigMap] = useState(false);
 
   // --- NEW: Export Menu Toggle State ---
