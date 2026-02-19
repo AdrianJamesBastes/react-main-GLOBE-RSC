@@ -172,7 +172,7 @@ function App() {
   const [searchTerm, setSearchTerm] = useState("");
   
   // FIX: Updated Default Coordinates to Panabo area
-  const [selectedSite, setSelectedSite] = useState({ lat: 7.0588, lng: 125.5786 });
+  const [selectedSite, setSelectedSite] = useState({ lat: 7.05565, lng: 125.54682 });
   const [showBigMap, setShowBigMap] = useState(false);
 
   // 2. EFFECTS
