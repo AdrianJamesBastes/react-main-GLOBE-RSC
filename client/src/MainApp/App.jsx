@@ -34,7 +34,7 @@ export default function App() {
   const [filterStatus, setFilterStatus] = useState('ALL');
   const [searchTerm, setSearchTerm] = useState("");
 
-  const [selectedSite, setSelectedSite] = useState({ lat: 7.25, lng: 125.55, zoom: 10 });
+  const [selectedSite, setSelectedSite] = useState({ lat: 7.055683604123395, lng: 125.54690231589159, zoom: 15 });
   const [showBigMap, setShowBigMap] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   
@@ -318,29 +318,51 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredResults.map((row, i) => (
-                        <tr 
-                          key={i} 
-                          className={`row-hover ${selectedSite.id === row.PLA_ID ? 'active-row' : ''}`}
-                          onClick={() => {
-                            const lat = parseFloat(row.Lat);
-                            const lng = parseFloat(row.Lng);
-                            setSelectedSite({ lat, lng, id: row.PLA_ID, zoom: 15 });
-                            setSelectedRowDetails(row);
-                          }}
-                        >
-                          <td className="font-bold">{row.PLA_ID}</td>
-                          <td>
-                            <span className={`status-badge ${row.Status.replace(/\s+/g, '-').toLowerCase()}`}>
-                              {row.Status}
-                            </span>
-                          </td>
-                          <td>{row["NMS Name"]}</td>
-                          <td>{row["UDM Name"]}</td>
-                          <td className="coord-text">{row.Lat}</td>
-                          <td className="coord-text">{row.Lng}</td>
-                        </tr>
-                      ))}
+                      {filteredResults.map((row, i) => {
+                        
+                        // 1. Identify if this is the EXACT row the user clicked
+                        const isExactRow = selectedSite?.index === i;
+                        
+                        // 2. Identify if this row shares the PLA_ID but is NOT the exact one clicked
+                        const isSameGroup = selectedSite?.id === row.PLA_ID && !isExactRow;
+
+                        // 3. Set the background colors (using rgba so it adapts to your Dark/Light mode)
+                        let rowStyle = { cursor: "pointer", transition: "background-color 0.2s" };
+                        if (isExactRow) {
+                          rowStyle.backgroundColor = "rgba(0, 123, 255, 0.2)"; // Strong blue highlight
+                        } else if (isSameGroup) {
+                          rowStyle.backgroundColor = "rgba(128, 128, 128, 0.15)"; // Subtle highlight for duplicates
+                        }
+
+                        return (
+                          <tr 
+                            key={i} 
+                            className="row-hover"
+                            style={rowStyle}
+                            onClick={() => {
+                              const lat = parseFloat(row.Lat);
+                              const lng = parseFloat(row.Lng);
+                              
+                              // 4. THE FIX: We pass `index: i` into the state! 
+                              // I also changed zoom to 18 here so the map flies in close enough to spiderfy.
+                              setSelectedSite({ lat, lng, id: row.PLA_ID, zoom: 18, index: i });
+                              setSelectedRowDetails(row);
+                            }}
+                          >
+                            <td className="font-bold">{row.PLA_ID}</td>
+                            <td>
+                              <span className={`status-badge ${row.Status.replace(/\s+/g, '-').toLowerCase()}`}>
+                                {row.Status}
+                              </span>
+                            </td>
+                            <td>{row["NMS Name"]}</td>
+                            <td>{row["UDM Name"]}</td>
+                            <td className="coord-text">{row.Lat}</td>
+                            <td className="coord-text">{row.Lng}</td>
+                          </tr>
+                        );
+                      })}
+                      
                       {filteredResults.length === 0 && (
                          <tr>
                            <td colSpan="6" style={{textAlign: 'center', padding: '20px', color: 'var(--text-secondary)'}}>
