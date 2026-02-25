@@ -415,9 +415,10 @@ body.dark-mode .active-row { color: white !important; }
   font-weight: 700;
   text-transform: uppercase;
 }
-.new-site { background: #d4edda; color: #155724; }
-.removed-site { background: #f8d7da; color: #721c24; }
-.name-mismatch { background: #fff3cd; color: #856404; }
+/* Update these 4 lines inside your App.css */
+.new { background: #d4edda; color: #155724; }
+.removed { background: #f8d7da; color: #721c24; }
+.mismatch { background: #fff3cd; color: #856404; }
 .unchanged { background: #5e5e5d; color: #ffffff; }
 
 .placeholder-container {
