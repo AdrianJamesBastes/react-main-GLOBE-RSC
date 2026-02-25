@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react';
-
 import AnalyticsDashboard from '../Dashboard/AnalyticsDashboard';
 import MapVisualizer from '../Map/MapVisualizer';
 
@@ -16,7 +15,7 @@ function LoadingScreen({ logo }) {
         <div className="spinner-ring"></div>
         <img src={logo} alt="Loading..." className="loading-logo" />
       </div>
-      <p className="loading-text">Processing Comparison of Data...</p>
+      <p className="loading-text">Processing Delta Comparison...</p>
     </div>
   );
 }
@@ -34,7 +33,7 @@ export default function App() {
   const [filterStatus, setFilterStatus] = useState('ALL');
   const [searchTerm, setSearchTerm] = useState("");
 
-  const [selectedSite, setSelectedSite] = useState({ lat: 7.25, lng: 125.55, zoom: 10 });
+  const [selectedSite, setSelectedSite] = useState({ lat: 7.05568, lng: 125.5469, zoom: 15 });
   const [showBigMap, setShowBigMap] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   
@@ -48,12 +47,26 @@ export default function App() {
   const toggleTheme = () => setIsDarkMode(prev => !prev);
   const currentLogo = isDarkMode ? globeLogoDark : globeLogoLight;
 
-  const filteredResults = results.filter(row => {
+const filteredResults = results.filter(row => {
     const term = searchTerm.toLowerCase();
-    const matchesSearch = [row.PLA_ID, row["UDM Name"], row["NMS Name"]]
+    const matchesSearch = [row.plaId, row.techName, row.baseLocation, row.remarks]
       .filter(Boolean).some(value => value.toString().toLowerCase().includes(term));
-    const matchesStatus = filterStatus === 'ALL' ? true : row.Status === filterStatus;
+    const matchesStatus = filterStatus === 'ALL' ? true : row.matchStatus === filterStatus;
     return matchesSearch && matchesStatus;
+  }).sort((a, b) => {
+    // 1. Sort primarily by Base Location (Alphanumerically)
+    const baseA = a.baseLocation || "";
+    const baseB = b.baseLocation || "";
+    const baseCompare = baseA.localeCompare(baseB, undefined, { numeric: true, sensitivity: 'base' });
+    
+    // 2. If the Base Locations are identical, sort by PLA_ID to keep groupings perfect
+    if (baseCompare === 0) {
+      const plaA = a.plaId || "";
+      const plaB = b.plaId || "";
+      return plaA.localeCompare(plaB, undefined, { numeric: true, sensitivity: 'base' });
+    }
+    
+    return baseCompare;
   });
 
   const readFileAsText = (file) => {
@@ -69,12 +82,12 @@ export default function App() {
     setShowExportMenu(false);
     if (results.length === 0) return alert("No data to export.");
 
-    const dataToExport = exportCategory === 'ALL' ? results : results.filter(row => row.Status === exportCategory);
+    const dataToExport = exportCategory === 'ALL' ? results : results.filter(row => row.matchStatus === exportCategory);
     if (dataToExport.length === 0) return alert(`There are no "${exportCategory}" sites to export.`);
 
-    const headers = ["PLA_ID", "Status", "NMS Name", "UDM Name", "Latitude", "Longitude"];
+    const headers = ["PLA_ID", "Match Status", "Tech Name", "Base Location", "Suffix", "Remarks", "Latitude", "Longitude"];
     const rows = dataToExport.map(row => [
-      row.PLA_ID, row.Status, `"${row["NMS Name"] || ""}"`, `"${row["UDM Name"] || ""}"`, row.Lat, row.Lng
+      row.plaId, row.matchStatus, `"${row.techName || ""}"`, `"${row.baseLocation || ""}"`, `"${row.technologySuffix || ""}"`, `"${row.remarks || ""}"`, row.lat, row.lng
     ].join(","));
     
     const csvContent = [headers.join(","), ...rows].join("\n");
@@ -82,7 +95,7 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `network_report_${exportCategory === 'ALL' ? 'All_Sites' : exportCategory.replace(/\s+/g, '_')}.csv`;
+    link.download = `network_report_${exportCategory === 'ALL' ? 'All_Sites' : exportCategory}.csv`;
     
     document.body.appendChild(link);
     link.click();
@@ -107,7 +120,7 @@ export default function App() {
                const res = JSON.parse(resRaw);
                if (res.success) {
                  setResults(res.data);
-                 if (res.count === 0) alert("Match! No discrepancies found.");
+                 if (res.count === 0) alert("No data parsed. Check CSV format.");
                } else alert("Error: " + res.error);
                setIsLoading(false);
              })
@@ -117,22 +130,25 @@ export default function App() {
              })
              .processCSVComparison(text1, text2);
         } else {
+           // Fallback Mock Data mapped to the new backend structure
            const mockData = [];
-           for(let i=1; i<=200; i++) {
+           const statuses = ["UNCHANGED", "MISMATCH", "NEW", "REMOVED"];
+           for(let i=1; i<=50; i++) {
              mockData.push({ 
-               PLA_ID: `MND_TEST_${String(i).padStart(4, '0')}`, 
-               Status: i % 4 === 0 ? "UNCHANGED" : i % 3 === 0 ? "NEW SITE" : "NAME MISMATCH", 
-               "NMS Name": `Site_${i}_Old`, 
-               "UDM Name": `Site_${i}_New`, 
-               Lat: (7.0 + (Math.random() * 0.5)).toFixed(5), 
-               Lng: (125.4 + (Math.random() * 0.5)).toFixed(5) 
+               plaId: `MIN_${String(i).padStart(4, '0')}`, 
+               matchStatus: statuses[i % 4], 
+               techName: `SITENAME${i}DDNLYK`, 
+               baseLocation: `SITENAME${i}DDN`,
+               technologySuffix: "LYK",
+               remarks: "Mock data generated.",
+               lat: (7.0 + (Math.random() * 0.5)).toFixed(5), 
+               lng: (125.4 + (Math.random() * 0.5)).toFixed(5) 
              });
            }
            setResults(mockData);
            setIsLoading(false);
-           setSelectedSite({ lat: 7.25, lng: 125.55, zoom: 10 });
         }
-      }, 1500);
+      }, 1000);
     } catch (error) {
       alert("Error: " + error.message);
       setIsLoading(false);
@@ -149,25 +165,20 @@ export default function App() {
         </div>
         
         <div className="header-actions" style={{ display: 'flex', gap: '10px' }}>
-          <button className="btn theme-toggle" onClick={toggleTheme} title={isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}>
+          <button className="btn theme-toggle" onClick={toggleTheme} title="Toggle Theme">
             {isDarkMode ? "☀️ Light" : "🌙 Dark"}
           </button>
 
-          <div 
-            className="export-dropdown-container" 
-            onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setShowExportMenu(false); }}
-            tabIndex={-1}
-          >
+          <div className="export-dropdown-container" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setShowExportMenu(false); }} tabIndex={-1}>
             <button className="btn primary-outline export-toggle-btn" onClick={() => setShowExportMenu(!showExportMenu)}>
               Export Data ▾
             </button>
-            
             {showExportMenu && (
               <div className="export-menu">
                 <button onClick={() => handleSpecificExport('ALL')}>Storm Masterlist</button>
-                <button onClick={() => handleSpecificExport('NEW SITE')}>New Sites Only</button>
-                <button onClick={() => handleSpecificExport('REMOVED SITE')}>Removed Only</button>
-                <button onClick={() => handleSpecificExport('NAME MISMATCH')}>Mismatches Only</button>
+                <button onClick={() => handleSpecificExport('NEW')}>New Sites Only</button>
+                <button onClick={() => handleSpecificExport('REMOVED')}>Removed Only</button>
+                <button onClick={() => handleSpecificExport('MISMATCH')}>Mismatches Only</button>
                 <button onClick={() => handleSpecificExport('UNCHANGED')}>Unchanged Only</button>
               </div>
             )}
@@ -176,14 +187,10 @@ export default function App() {
       </header>
 
       <main className="main-layout">
-        
-        {/* --- CLEAN CSS-POWERED SIDEBAR --- */}
         <aside className="sidebar">
-          
           <div className="sidebar-top-section">
             <div className={`sidebar-carousel ${selectedRowDetails ? 'show-details' : ''}`}>
               
-              {/* 1. DATA INPUT PANEL */}
               <div className="carousel-panel">
                 <h3 style={{ marginTop: 0, marginBottom: '20px', fontSize: '1.2rem' }}>Data Input</h3>
                 <div className="upload-group">
@@ -205,7 +212,6 @@ export default function App() {
                 </button>
               </div>
 
-              {/* 2. SITE DETAILS PANEL */}
               <div className="carousel-panel">
                 <div className="details-header">
                   <button className="back-btn" onClick={() => setSelectedRowDetails(null)}>←</button>
@@ -216,144 +222,192 @@ export default function App() {
                   <div className="details-content">
                     <div>
                       <span className="input-label">PLA_ID</span>
-                      <div style={{ fontSize: '1.3rem', fontWeight: 'bold', letterSpacing: '0.5px' }}>{selectedRowDetails.PLA_ID}</div>
+                      <div style={{ fontSize: '1.3rem', fontWeight: 'bold' }}>{selectedRowDetails.plaId}</div>
                     </div>
                     
                     <div>
                       <span className="input-label">Status</span>
                       <div style={{ marginTop: '6px' }}>
-                        <span className={`status-badge ${selectedRowDetails.Status.replace(/\s+/g, '-').toLowerCase()}`}>
-                          {selectedRowDetails.Status}
+                        <span className={`status-badge ${selectedRowDetails.matchStatus.toLowerCase()}`}>
+                          {selectedRowDetails.matchStatus}
                         </span>
                       </div>
                     </div>
 
                     <div className="details-box">
-                      <span className="input-label">NMS Database</span>
-                      <div style={{ fontWeight: 'bold', marginTop: '4px', wordBreak: 'break-word' }} 
-                           className={selectedRowDetails.Status === 'NAME MISMATCH' ? 'text-danger' : ''}>
-                        {selectedRowDetails["NMS Name"] || "N/A (Missing)"}
+                      <span className="input-label">Tech Name (String)</span>
+                      <div style={{ fontWeight: 'bold', marginTop: '4px', wordBreak: 'break-word' }}>
+                        {selectedRowDetails.techName}
                       </div>
                     </div>
 
                     <div className="details-box">
-                      <span className="input-label">UDM Database</span>
-                      <div style={{ fontWeight: 'bold', marginTop: '4px', wordBreak: 'break-word' }}
-                           className={selectedRowDetails.Status === 'NAME MISMATCH' ? 'text-amber' : ''}>
-                        {selectedRowDetails["UDM Name"] || "N/A (Missing)"}
+                      <span className="input-label">System Remarks</span>
+                      <div style={{ fontWeight: 'bold', marginTop: '4px', wordBreak: 'break-word', color: selectedRowDetails.matchStatus === 'MISMATCH' ? '#d97706' : '' }}>
+                        {selectedRowDetails.remarks}
                       </div>
                     </div>
 
                     <div>
                       <span className="input-label">Location Profile</span>
                       <div className="details-box" style={{ fontFamily: 'monospace', fontSize: '0.9rem', marginTop: '6px' }}>
-                        Lat: {selectedRowDetails.Lat}<br/>
-                        Lng: {selectedRowDetails.Lng}
+                        Lat: {selectedRowDetails.lat}<br/>
+                        Lng: {selectedRowDetails.lng}
                       </div>
                     </div>
                   </div>
                 )}
               </div>
-
             </div>
           </div>
 
-          {/* SEAMLESS MINI MAP */}
           <div className="sidebar-map-wrapper">
             <div className="map-floating-header">
               <span className="floating-title">Site Visualizer</span>
-              <button className="floating-btn" onClick={() => setShowBigMap(true)} title="Expand Map">⤢</button>
+              <button className="floating-btn" onClick={() => setShowBigMap(true)}>⤢</button>
             </div>
-            
-            <div className="map-shadow-overlay"></div>
-            
             <div className="mini-map">
-              <MapVisualizer 
-                selectedSite={selectedSite} 
-                filteredResults={filteredResults}
-                isExpanded={false} 
-              />
+              <MapVisualizer selectedSite={selectedSite} filteredResults={filteredResults} isExpanded={false} />
             </div>
           </div>
         </aside>
 
         <section className="content-area">
           <div className="output-card">
-            
-            {results.length > 0 ? (
-              <AnalyticsDashboard 
-                data={results} 
-                activeFilter={filterStatus}
-                onFilterChange={setFilterStatus}
-              />
-            ) : null}
+            {results.length > 0 && (
+              <AnalyticsDashboard data={results} activeFilter={filterStatus} onFilterChange={setFilterStatus} />
+            )}
 
-            {results.length > 0 ? (
+            {results.length > 0 && (
               <div className="table-toolbar">
                 <span className="table-label">
                   {filterStatus === 'ALL' ? 'Detailed Report' : `Filtered View: ${filterStatus}`}
                 </span>
-                <input 
-                  type="text" 
-                  className="search-bar" 
-                  placeholder="Search..." 
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                />
+                <input type="text" className="search-bar" placeholder="Search ID or Name..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
               </div>
-            ) : null}
+            )}
 
             <div className="output-box">
               {results.length > 0 ? (
                 <div className="table-wrapper">
                   <table className="result-table">
                     <thead>
-                      <tr>
-                        <th>PLA_ID</th>
-                        <th>Status</th>
-                        <th>NMS Name</th>
-                        <th>UDM Name</th>
-                        <th>Latitude</th>
-                        <th>Longitude</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredResults.map((row, i) => (
-                        <tr 
-                          key={i} 
-                          className={`row-hover ${selectedSite.id === row.PLA_ID ? 'active-row' : ''}`}
+  <tr>
+    <th>PLA_ID</th>
+    <th>Status</th>
+    <th>Base Name</th>
+    <th style={{color: '#1a73e8'}}>Technology</th>
+    <th style={{color: '#1a73e8'}}>NMS Techname</th>
+    <th>Remarks</th>
+  </tr>
+        </thead>
+                        <tbody>
+                  {filteredResults.flatMap((row, i) => {
+                    
+                    // --- 1. THE RAN CLASSIFIER FUNCTION ---
+                    // This reads the NMS string, isolates the suffix, and tags the technology
+                    const buildSubRows = (origStringGroup, baseGen) => {
+                      if (!origStringGroup) return [];
+                      
+                      // Split the " | " strings into an array so they each get their own row!
+                      return origStringGroup.split(" | ").map(nmsName => {
+                        
+                        // Isolate just the suffix to prevent false positives from the city name
+                        const suffixMatch = nmsName.match(/(?:ID|AS|[XYLFWKHVZJBMNPRT])+$/i);
+                        const suffix = suffixMatch ? suffixMatch[0].toUpperCase() : "";
+                        
+                        let label = baseGen;
+                        
+                        // Apply your exact telecom rules
+                        if (baseGen === "4G") {
+                          let types = [];
+                          if (/[FLWY]/i.test(suffix)) types.push("");
+                          if (/H/i.test(suffix)) types.push("");
+                          if (/V/i.test(suffix)) types.push("");
+                          
+                          if (types.length > 0) label = `4G`;
+                        } 
+                        else if (baseGen === "5G") {
+                          let types = [];
+                          if (/M/i.test(suffix)) types.push("");
+                          if (/[PN]/i.test(suffix)) types.push(""); // Including N as NMM Macro
+                          
+                          if (types.length > 0) label = `5G`;
+                        }
+                        
+                        return { techGen: label, nmsName: nmsName };
+                      });
+                    };
+
+                    // --- 2. UNFOLD THE ROWS ---
+                    const subRows = [
+                      ...buildSubRows(row.original2G, "2G"),
+                      ...buildSubRows(row.original4G, "4G"),
+                      ...buildSubRows(row.original5G, "5G")
+                    ];
+                    
+                    // If it's a REMOVED site (no NMS data), we just show the smashed UDM name
+                    if (subRows.length === 0) {
+                      subRows.push({ techGen: "", nmsName: "" });
+                    }
+
+                    // --- 3. DRAW THE TABLE ---
+                    return subRows.map((sub, j) => {
+                      const isExactRow = selectedSite?.index === i;
+                      const isSameGroup = selectedSite?.id === row.plaId && !isExactRow;
+                      let rowStyle = { cursor: "pointer", transition: "background-color 0.2s" };
+                      
+                      if (isExactRow) rowStyle.backgroundColor = "rgba(0, 123, 255, 0.2)";
+                      else if (isSameGroup) rowStyle.backgroundColor = "rgba(128, 128, 128, 0.15)";
+
+                      // Thicker bottom border to cleanly separate different PLA_IDs
+                      const isLastOfGroup = j === subRows.length - 1;
+                      if (isLastOfGroup) rowStyle.borderBottom = "2px solid var(--border-color)";
+
+                      return (
+                        <tr key={`${i}-${j}`} className="row-hover" style={rowStyle}
                           onClick={() => {
-                            const lat = parseFloat(row.Lat);
-                            const lng = parseFloat(row.Lng);
-                            setSelectedSite({ lat, lng, id: row.PLA_ID, zoom: 15 });
+                            const lat = parseFloat(row.lat);
+                            const lng = parseFloat(row.lng);
+                            setSelectedSite({ lat, lng, id: row.plaId, zoom: 18, index: i });
                             setSelectedRowDetails(row);
                           }}
                         >
-                          <td className="font-bold">{row.PLA_ID}</td>
+                          {/* Only show the Base Data on the FIRST row of the group to keep it clean */}
+                          <td className="font-bold">{j === 0 ? row.plaId : ""}</td>
                           <td>
-                            <span className={`status-badge ${row.Status.replace(/\s+/g, '-').toLowerCase()}`}>
-                              {row.Status}
-                            </span>
+                            {j === 0 && (
+                              <span className={`status-badge ${row.matchStatus.toLowerCase()}`}>
+                                {row.matchStatus}
+                              </span>
+                            )}
                           </td>
-                          <td>{row["NMS Name"]}</td>
-                          <td>{row["UDM Name"]}</td>
-                          <td className="coord-text">{row.Lat}</td>
-                          <td className="coord-text">{row.Lng}</td>
+                          
+                          <td style={{ fontWeight: '500' }}>{j === 0 ? row.baseLocation : ""}</td>
+                          
+                          {/* The dynamically classified Technology Label */}
+                          <td style={{ fontWeight: 'bold', color: sub.techGen.includes('5G') ? '#28a745' : (sub.techGen.includes('4G') ? '#007bff' : '#666') }}>
+                            {sub.techGen}
+                          </td>
+                          
+                          {/* The individual, original NMS String */}
+                          <td style={{ fontFamily: 'monospace', color: '#1a73e8', fontWeight: 'bold' }}>
+                            {sub.nmsName}
+                          </td>
+                          
+                          <td style={{ fontSize: '0.75rem', color: 'var(--text-secondary)'}}>
+                            {j === 0 ? row.remarks : ""}
+                          </td>
                         </tr>
-                      ))}
-                      {filteredResults.length === 0 && (
-                         <tr>
-                           <td colSpan="6" style={{textAlign: 'center', padding: '20px', color: 'var(--text-secondary)'}}>
-                             No results found for "{searchTerm}" in {filterStatus} category.
-                           </td>
-                         </tr>
-                      )}
-                    </tbody>
+                      );
+                    });
+                  })}
+                </tbody>
                   </table>
                 </div>
               ) : (
                 <div className="placeholder-container">
-                  <p className="placeholder-text">Ready for file comparison. Please upload NMS and UDM CSV files.</p>
+                  <p className="placeholder-text">Ready for Delta check. Please upload NMS and UDM CSV files.</p>
                 </div>
               )}
             </div>
@@ -365,15 +419,11 @@ export default function App() {
         <div className="map-modal-overlay">
           <div className="map-modal-content">
             <div className="map-modal-header">
-              <h3>Site Location: {selectedSite.id || "Davao Region"}</h3>
+              <h3>Site Location: {selectedSite.id || "Region Map"}</h3>
               <button className="close-btn" onClick={() => setShowBigMap(false)}>✖ Close</button>
             </div>
             <div className="big-map-wrapper">
-              <MapVisualizer 
-                selectedSite={selectedSite} 
-                filteredResults={filteredResults}
-                isExpanded={true} 
-              />
+              <MapVisualizer selectedSite={selectedSite} filteredResults={filteredResults} isExpanded={true} />
             </div>
           </div>
         </div>

@@ -3,16 +3,16 @@ import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
 export default function AnalyticsDashboard({ data, activeFilter, onFilterChange }) {
   if (!data || data.length === 0) return null;
 
-  const newSites = data.filter(r => r.Status === 'NEW SITE').length;
-  const removed = data.filter(r => r.Status === 'REMOVED SITE').length;
-  const mismatch = data.filter(r => r.Status === 'NAME MISMATCH').length;
-  const unchanged = data.filter(r => r.Status === 'UNCHANGED').length;
+  const newSites = data.filter(r => r.matchStatus === 'NEW').length;
+  const removed = data.filter(r => r.matchStatus === 'REMOVED').length;
+  const mismatch = data.filter(r => r.matchStatus === 'MISMATCH').length;
+  const unchanged = data.filter(r => r.matchStatus === 'UNCHANGED').length;
 
   const chartData = [
     { name: 'New', value: newSites, color: '#28a745' },
     { name: 'Removed', value: removed, color: '#dc3545' },
     { name: 'Mismatch', value: mismatch, color: '#ffc107' },
-    { name: 'Unchange', value: unchanged, color: '#5e5e5d' }
+    { name: 'Unchanged', value: unchanged, color: '#5e5e5d' }
   ].filter(item => item.value > 0);
 
   const getCardStyle = (type, colorInfo) => {
@@ -30,7 +30,7 @@ export default function AnalyticsDashboard({ data, activeFilter, onFilterChange 
   return (
     <div className="dashboard-container">
       <div className="chart-section">
-        <h4 className="chart-title">Breakdown</h4>
+        <h4 className="chart-title">Delta Breakdown</h4>
         <div style={{ width: '100%', height: 130 }}>
           <ResponsiveContainer>
             <PieChart>
@@ -47,23 +47,23 @@ export default function AnalyticsDashboard({ data, activeFilter, onFilterChange 
 
       <div className="cards-section">
         <div className="stat-card total" onClick={() => onFilterChange('ALL')} style={getCardStyle('ALL', { border: '#007bff', bg: 'rgba(0, 123, 255, 0.1)' })}>
-          <span className="stat-label">Total</span>
+          <span className="stat-label">Total Validated</span>
           <span className="stat-value">{data.length}</span>
         </div>
-        <div className="stat-card new" onClick={() => onFilterChange('NEW SITE')} style={getCardStyle('NEW SITE', { border: '#28a745', bg: 'rgba(40, 167, 69, 0.1)' })}>
-          <span className="stat-label">New</span>
+        <div className="stat-card new" onClick={() => onFilterChange('NEW')} style={getCardStyle('NEW', { border: '#28a745', bg: 'rgba(40, 167, 69, 0.1)' })}>
+          <span className="stat-label">New in NMS</span>
           <span className="stat-value">{newSites}</span>
         </div>
-        <div className="stat-card removed" onClick={() => onFilterChange('REMOVED SITE')} style={getCardStyle('REMOVED SITE', { border: '#dc3545', bg: 'rgba(220, 53, 69, 0.1)' })}>
-          <span className="stat-label">Removed</span>
+        <div className="stat-card removed" onClick={() => onFilterChange('REMOVED')} style={getCardStyle('REMOVED', { border: '#dc3545', bg: 'rgba(220, 53, 69, 0.1)' })}>
+          <span className="stat-label">Missing (Removed)</span>
           <span className="stat-value">{removed}</span>
         </div>
-        <div className="stat-card mismatch" onClick={() => onFilterChange('NAME MISMATCH')} style={getCardStyle('NAME MISMATCH', { border: '#ffc107', bg: 'rgba(255, 193, 7, 0.1)' })}>
-          <span className="stat-label">Mismatch</span>
+        <div className="stat-card mismatch" onClick={() => onFilterChange('MISMATCH')} style={getCardStyle('MISMATCH', { border: '#ffc107', bg: 'rgba(255, 193, 7, 0.1)' })}>
+          <span className="stat-label">Discrepancy</span>
           <span className="stat-value">{mismatch}</span>
         </div>
         <div className="stat-card unchanged" onClick={() => onFilterChange('UNCHANGED')} style={getCardStyle('UNCHANGED', { border: '#3c3c3c', bg: 'rgba(137, 136, 136, 0.18)' })}>
-          <span className="stat-label">Unchanged</span>
+          <span className="stat-label">Verified</span>
           <span className="stat-value">{unchanged}</span>
         </div>
       </div>
