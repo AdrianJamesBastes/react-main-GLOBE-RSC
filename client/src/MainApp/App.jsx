@@ -1,12 +1,124 @@
 import { useState, useEffect } from 'react';
 import AnalyticsDashboard from '../Dashboard/AnalyticsDashboard';
 import MapVisualizer from '../Map/MapVisualizer';
-
 import globeLogoDark from '../assets/Globe_LogoW.png'; 
 import globeLogoLight from '../assets/Globe_LogoB.png'; 
 
+import { provinces, cities, siteCodes, cityToProvinceMap, cityToBarangayMap, regionsToProvincesMap } from './MapDictionary/TelecomDictionaries';
 import './App.css';
 
+// ============================================================================
+// HELPER 1: TELECOM GEOGRAPHIC PARSER (For the Export)
+// ============================================================================
+const parseLocationData = (baseName) => {
+  if (!baseName) return { siteCode: "", place: "", city: "", province: "", region: "" };
+  let remainingString = baseName.toUpperCase();
+
+  // ❌ NOTE: We REMOVED the aggressive .replace() line from here!
+
+  const provKeys = Object.keys(provinces).sort((a, b) => b.length - a.length);
+  const cityKeys = Object.keys(cities).sort((a, b) => b.length - a.length);
+
+  let extracted = { siteCode: "", place: "", city: "", province: "", region: "" };
+
+  // 1. PEEL THE PROVINCE (Safely eats trailing numbers and tech suffixes ONLY IF the province is found first)
+  for (const prov of provKeys) {
+    const regex = new RegExp(prov + "\\d*(?:IO|ID|AS|CO|[XYLFWKHVZJBMNPRT])*$", "i");
+    const match = remainingString.match(regex);
+    
+    if (match) {
+      extracted.province = provinces[prov];
+      remainingString = remainingString.slice(0, -match[0].length); 
+      break;
+    }
+  }
+
+  // 2. PEEL THE CITY (Safely eats trailing numbers and tech suffixes)
+  for (const city of cityKeys) {
+    const regex = new RegExp(city + "\\d*(?:IO|ID|AS|CO|[XYLFWKHVZJBMNPRT])*$", "i");
+    const match = remainingString.match(regex);
+    
+    if (match) {
+      extracted.city = cities[city];
+      remainingString = remainingString.slice(0, -match[0].length);
+      break;
+    }
+  }
+
+  // 3. PEEL THE SITE CODE FROM THE FRONT
+  let foundCode = false;
+  const sortedCodes = [...siteCodes].sort((a, b) => b.length - a.length); 
+  
+  for (const code of sortedCodes) {
+    if (remainingString.startsWith(code)) {
+      extracted.siteCode = code;
+      remainingString = remainingString.slice(code.length); 
+      foundCode = true;
+      break;
+    }
+  }
+
+  if (!foundCode) extracted.siteCode = ""; 
+  extracted.place = remainingString || "-";
+
+  // 4. AUTO-FILL CITY FROM BARANGAY
+  if (extracted.city === "." && extracted.place !== "-") {
+    // Clean the remaining place of telecom junk just in case the encoder only typed the barangay (e.g., BUHANGINIO)
+    const cleanPlace = extracted.place.replace(/\d*(?:IO|ID|AS|CO|[XYLFWKHVZJBMNPRT])*$/i, "");
+    
+    for (const [cityName, barangayArray] of Object.entries(cityToBarangayMap)) {
+      const upperBarangays = barangayArray.map(b => b.toUpperCase());
+      if (upperBarangays.includes(cleanPlace)) {
+        extracted.city = cityName;
+        extracted.place = cleanPlace; // Update place to remove the IO/ID junk
+        break;
+      }
+    }
+  }
+
+  // 5. AUTO-FILL PROVINCE FROM CITY
+  if (extracted.province === "" && extracted.city !== "") {
+    extracted.province = cityToProvinceMap[extracted.city] || "";
+  }
+
+  // 6. AUTO-FILL REGION FROM PROVINCE
+  if (extracted.province !== "") {
+    for (const [regionName, provinceArray] of Object.entries(regionsToProvincesMap)) {
+      if (provinceArray.includes(extracted.province)) {
+        extracted.region = regionName;
+        break;
+      }
+    }
+  }
+
+  return extracted;
+};
+
+// ============================================================================
+// HELPER 2: TECHNOLOGY SPLITTER (For the Export)
+// ============================================================================
+const getTechSplits = (suffix) => {
+  const s = (suffix || "").toUpperCase();
+  let res = { g2: "", g4: "", g5: "" };
+  
+  if (!s || /^(?:ID|AS)+$/i.test(s)) {
+    res.g2 = "YES"; 
+  }
+
+  for (let char of s) {
+    if ("MNPRT".includes(char)) res.g5 += char;
+    else if ("FHLKWYVB".includes(char)) res.g4 += char;
+    else if (char === "X") res.g2 = "X";
+  }
+  
+  if (!res.g2 && (res.g4 || res.g5)) res.g2 = "YES";
+
+  return res;
+};
+
+// ============================================================================
+// MAIN COMPONENT
+// ============================================================================
 function LoadingScreen({ logo }) {
   return (
     <div className="loading-overlay">
@@ -47,19 +159,17 @@ export default function App() {
   const toggleTheme = () => setIsDarkMode(prev => !prev);
   const currentLogo = isDarkMode ? globeLogoDark : globeLogoLight;
 
-const filteredResults = results.filter(row => {
+  const filteredResults = results.filter(row => {
     const term = searchTerm.toLowerCase();
     const matchesSearch = [row.plaId, row.techName, row.baseLocation, row.remarks]
       .filter(Boolean).some(value => value.toString().toLowerCase().includes(term));
     const matchesStatus = filterStatus === 'ALL' ? true : row.matchStatus === filterStatus;
     return matchesSearch && matchesStatus;
   }).sort((a, b) => {
-    // 1. Sort primarily by Base Location (Alphanumerically)
     const baseA = a.baseLocation || "";
     const baseB = b.baseLocation || "";
     const baseCompare = baseA.localeCompare(baseB, undefined, { numeric: true, sensitivity: 'base' });
     
-    // 2. If the Base Locations are identical, sort by PLA_ID to keep groupings perfect
     if (baseCompare === 0) {
       const plaA = a.plaId || "";
       const plaB = b.plaId || "";
@@ -85,17 +195,41 @@ const filteredResults = results.filter(row => {
     const dataToExport = exportCategory === 'ALL' ? results : results.filter(row => row.matchStatus === exportCategory);
     if (dataToExport.length === 0) return alert(`There are no "${exportCategory}" sites to export.`);
 
-    const headers = ["PLA_ID", "Match Status", "Tech Name", "Base Location", "Suffix", "Remarks", "Latitude", "Longitude"];
-    const rows = dataToExport.map(row => [
-      row.plaId, row.matchStatus, `"${row.techName || ""}"`, `"${row.baseLocation || ""}"`, `"${row.technologySuffix || ""}"`, `"${row.remarks || ""}"`, row.lat, row.lng
-    ].join(","));
+    const headers = [
+      "PLA_ID", "Status", "Site Code", "Region", "Province", "City", "Place", "Latitude", "Longitude",
+      "2G", "4G", "5G", "Full Techname", "Remarks"
+    ];
+    
+    const rows = dataToExport.map(row => {
+      const geo = parseLocationData(row.baseLocation);
+      const tech = getTechSplits(row.technologySuffix);
+      
+      return [
+        row.plaId, 
+        row.matchStatus, 
+        `"${geo.siteCode}"`,
+        `"${geo.region}"`,
+        `"${geo.province}"`,
+        `"${geo.city}"`,
+        `"${geo.place}"`,
+        row.lat, 
+        row.lng,
+        `"${tech.g2 || ""}"`,
+        `"${tech.g4 || ""}"`,
+        `"${tech.g5 || ""}"`,
+        `"${row.techName || ""}"`, 
+        `"${row.remarks || ""}"` 
+      ].join(",");
+    });
     
     const csvContent = [headers.join(","), ...rows].join("\n");
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `network_report_${exportCategory === 'ALL' ? 'All_Sites' : exportCategory}.csv`;
+    
+    const dateStr = new Date().toISOString().split('T')[0];
+    link.download = `StormMasterlist_${exportCategory === 'ALL' ? 'Complete' : exportCategory}_${dateStr}.csv`;
     
     document.body.appendChild(link);
     link.click();
@@ -130,7 +264,6 @@ const filteredResults = results.filter(row => {
              })
              .processCSVComparison(text1, text2);
         } else {
-           // Fallback Mock Data mapped to the new backend structure
            const mockData = [];
            const statuses = ["UNCHANGED", "MISMATCH", "NEW", "REMOVED"];
            for(let i=1; i<=50; i++) {
@@ -292,117 +425,107 @@ const filteredResults = results.filter(row => {
                 <div className="table-wrapper">
                   <table className="result-table">
                     <thead>
-  <tr>
-    <th>PLA_ID</th>
-    <th>Status</th>
-    <th>Base Name</th>
-    <th style={{color: '#1a73e8'}}>Technology</th>
-    <th style={{color: '#1a73e8'}}>NMS Techname</th>
-    <th>Remarks</th>
-  </tr>
-        </thead>
-                        <tbody>
-                  {filteredResults.flatMap((row, i) => {
-                    
-                    // --- 1. THE RAN CLASSIFIER FUNCTION ---
-                    // This reads the NMS string, isolates the suffix, and tags the technology
-                    const buildSubRows = (origStringGroup, baseGen) => {
-                      if (!origStringGroup) return [];
-                      
-                      // Split the " | " strings into an array so they each get their own row!
-                      return origStringGroup.split(" | ").map(nmsName => {
+                      <tr>
+                        <th>PLA_ID</th>
+                        <th>Status</th>
+                        <th>Base Name</th>
+                        <th style={{color: '#1a73e8'}}>Technology</th>
+                        <th style={{color: '#1a73e8'}}>NMS Techname</th>
+                        <th>Remarks</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredResults.flatMap((row, i) => {
                         
-                        // Isolate just the suffix to prevent false positives from the city name
-                        const suffixMatch = nmsName.match(/(?:ID|AS|[XYLFWKHVZJBMNPRT])+$/i);
-                        const suffix = suffixMatch ? suffixMatch[0].toUpperCase() : "";
-                        
-                        let label = baseGen;
-                        
-                        // Apply your exact telecom rules
-                        if (baseGen === "4G") {
-                          let types = [];
-                          if (/[FLWY]/i.test(suffix)) types.push("");
-                          if (/H/i.test(suffix)) types.push("");
-                          if (/V/i.test(suffix)) types.push("");
+                        // --- 1. THE RAN CLASSIFIER FUNCTION ---
+                        const buildSubRows = (origStringGroup, baseGen) => {
+                          if (!origStringGroup) return [];
                           
-                          if (types.length > 0) label = `4G`;
-                        } 
-                        else if (baseGen === "5G") {
-                          let types = [];
-                          if (/M/i.test(suffix)) types.push("");
-                          if (/[PN]/i.test(suffix)) types.push(""); // Including N as NMM Macro
-                          
-                          if (types.length > 0) label = `5G`;
+                          return origStringGroup.split(" | ").map(nmsName => {
+                            const suffixMatch = nmsName.match(/(?:ID|AS|[XYLFWKHVZJBMNPRT])+$/i);
+                            const suffix = suffixMatch ? suffixMatch[0].toUpperCase() : "";
+                            
+                            let label = baseGen;
+                            
+                            if (baseGen === "4G") {
+                              let types = [];
+                              if (/[FLWY]/i.test(suffix)) types.push("FDD");
+                              if (/H/i.test(suffix)) types.push("TDD");
+                              if (/V/i.test(suffix)) types.push("MM");
+                              
+                              if (types.length > 0) label = `4G`;
+                            } 
+                            else if (baseGen === "5G") {
+                              let types = [];
+                              if (/M/i.test(suffix)) types.push("MM");
+                              if (/[PN]/i.test(suffix)) types.push("NMM"); 
+                              
+                              if (types.length > 0) label = `5G`;
+                            }
+                            
+                            return { techGen: label, nmsName: nmsName };
+                          });
+                        };
+
+                        // --- 2. UNFOLD THE ROWS ---
+                        const subRows = [
+                          ...buildSubRows(row.original2G, "2G"),
+                          ...buildSubRows(row.original4G, "4G"),
+                          ...buildSubRows(row.original5G, "5G")
+                        ];
+                        
+                        if (subRows.length === 0) {
+                          subRows.push({ techGen: "UDM Only", nmsName: row.techName });
                         }
-                        
-                        return { techGen: label, nmsName: nmsName };
-                      });
-                    };
 
-                    // --- 2. UNFOLD THE ROWS ---
-                    const subRows = [
-                      ...buildSubRows(row.original2G, "2G"),
-                      ...buildSubRows(row.original4G, "4G"),
-                      ...buildSubRows(row.original5G, "5G")
-                    ];
-                    
-                    // If it's a REMOVED site (no NMS data), we just show the smashed UDM name
-                    if (subRows.length === 0) {
-                      subRows.push({ techGen: "", nmsName: "" });
-                    }
+                        // --- 3. DRAW THE TABLE ---
+                        return subRows.map((sub, j) => {
+                          const isExactRow = selectedSite?.index === i;
+                          const isSameGroup = selectedSite?.id === row.plaId && !isExactRow;
+                          let rowStyle = { cursor: "pointer", transition: "background-color 0.2s" };
+                          
+                          if (isExactRow) rowStyle.backgroundColor = "rgba(0, 123, 255, 0.2)";
+                          else if (isSameGroup) rowStyle.backgroundColor = "rgba(128, 128, 128, 0.15)";
 
-                    // --- 3. DRAW THE TABLE ---
-                    return subRows.map((sub, j) => {
-                      const isExactRow = selectedSite?.index === i;
-                      const isSameGroup = selectedSite?.id === row.plaId && !isExactRow;
-                      let rowStyle = { cursor: "pointer", transition: "background-color 0.2s" };
-                      
-                      if (isExactRow) rowStyle.backgroundColor = "rgba(0, 123, 255, 0.2)";
-                      else if (isSameGroup) rowStyle.backgroundColor = "rgba(128, 128, 128, 0.15)";
+                          const isLastOfGroup = j === subRows.length - 1;
+                          if (isLastOfGroup) rowStyle.borderBottom = "2px solid var(--border-color)";
 
-                      // Thicker bottom border to cleanly separate different PLA_IDs
-                      const isLastOfGroup = j === subRows.length - 1;
-                      if (isLastOfGroup) rowStyle.borderBottom = "2px solid var(--border-color)";
-
-                      return (
-                        <tr key={`${i}-${j}`} className="row-hover" style={rowStyle}
-                          onClick={() => {
-                            const lat = parseFloat(row.lat);
-                            const lng = parseFloat(row.lng);
-                            setSelectedSite({ lat, lng, id: row.plaId, zoom: 18, index: i });
-                            setSelectedRowDetails(row);
-                          }}
-                        >
-                          {/* Only show the Base Data on the FIRST row of the group to keep it clean */}
-                          <td className="font-bold">{j === 0 ? row.plaId : ""}</td>
-                          <td>
-                            {j === 0 && (
-                              <span className={`status-badge ${row.matchStatus.toLowerCase()}`}>
-                                {row.matchStatus}
-                              </span>
-                            )}
-                          </td>
-                          
-                          <td style={{ fontWeight: '500' }}>{j === 0 ? row.baseLocation : ""}</td>
-                          
-                          {/* The dynamically classified Technology Label */}
-                          <td style={{ fontWeight: 'bold', color: sub.techGen.includes('5G') ? '#28a745' : (sub.techGen.includes('4G') ? '#007bff' : '#666') }}>
-                            {sub.techGen}
-                          </td>
-                          
-                          {/* The individual, original NMS String */}
-                          <td style={{ fontFamily: 'monospace', color: '#1a73e8', fontWeight: 'bold' }}>
-                            {sub.nmsName}
-                          </td>
-                          
-                          <td style={{ fontSize: '0.75rem', color: 'var(--text-secondary)'}}>
-                            {j === 0 ? row.remarks : ""}
-                          </td>
-                        </tr>
-                      );
-                    });
-                  })}
-                </tbody>
+                          return (
+                            <tr key={`${i}-${j}`} className="row-hover" style={rowStyle}
+                              onClick={() => {
+                                const lat = parseFloat(row.lat);
+                                const lng = parseFloat(row.lng);
+                                setSelectedSite({ lat, lng, id: row.plaId, zoom: 18, index: i });
+                                setSelectedRowDetails(row);
+                              }}
+                            >
+                              <td className="font-bold">{j === 0 ? row.plaId : ""}</td>
+                              <td>
+                                {j === 0 && (
+                                  <span className={`status-badge ${row.matchStatus.toLowerCase()}`}>
+                                    {row.matchStatus}
+                                  </span>
+                                )}
+                              </td>
+                              
+                              <td style={{ fontWeight: '500' }}>{j === 0 ? row.baseLocation : ""}</td>
+                              
+                              <td style={{ fontWeight: 'bold', color: sub.techGen.includes('5G') ? '#28a745' : (sub.techGen.includes('4G') ? '#007bff' : '#666') }}>
+                                {sub.techGen}
+                              </td>
+                              
+                              <td style={{ fontFamily: 'monospace', color: '#1a73e8', fontWeight: 'bold' }}>
+                                {sub.nmsName}
+                              </td>
+                              
+                              <td style={{ fontSize: '0.75rem', color: 'var(--text-secondary)'}}>
+                                {j === 0 ? row.remarks : ""}
+                              </td>
+                            </tr>
+                          );
+                        });
+                      })}
+                    </tbody>
                   </table>
                 </div>
               ) : (
