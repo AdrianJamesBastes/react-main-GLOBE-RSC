@@ -1,6 +1,4 @@
-/* =========================================
-   0. THEME VARIABLES (SYSTEM DEPENDENT)
-   ========================================= */
+ /* 0. THEME VARIABLES (SYSTEM DEPENDENT) */
 :root {
   /* --- DEFAULT (LIGHT MODE) --- */
   --bg-app: #ffffff;
@@ -53,9 +51,7 @@ body {
   font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 }
 
-/* =========================================
-   1.5 MODERN FLAT SCROLLBARS
-   ========================================= */
+ /*  1.5 MODERN FLAT SCROLLBARS */
 /* For Firefox */
 * {
   scrollbar-width: thin;
@@ -138,9 +134,7 @@ body.dark-mode .top-bar {
   overflow: hidden;
 }
 
-/* =========================================
-   2. MODERN SLIDING SIDEBAR 
-   ========================================= */
+ /*  2. MODERN SLIDING SIDEBAR */
 .sidebar {
   width: 380px; 
   background-color: var(--bg-card); 
@@ -237,9 +231,7 @@ body.dark-mode .file-drop-area:hover { border-color: #3b82f6; }
 .text-danger { color: #dc3545 !important; }
 .text-amber { color: #d97706 !important; } 
 
-/* =========================================
-   3. SIDEBAR MAP (WITH CLEAN SEPARATION CUT)
-   ========================================= */
+  /* 3. SIDEBAR MAP (WITH CLEAN SEPARATION CUT) */
 .sidebar-map-wrapper {
   height: 350px;
   flex-shrink: 0;
@@ -289,9 +281,9 @@ body.dark-mode .file-drop-area:hover { border-color: #3b82f6; }
   filter: var(--map-filter); 
 }
 
-/* =========================================
-   4. CONTENT AREA & OUTPUT 
-   ========================================= */
+
+ /*  4. CONTENT AREA & OUTPUT */
+
 .content-area {
   flex: 1;
   padding: 2rem;
@@ -328,9 +320,7 @@ body.dark-mode .file-drop-area:hover { border-color: #3b82f6; }
   box-shadow: 0 0 0 2px rgba(0, 31, 95, 0.2);
 }
 
-/* =========================================
-   5. TABLE TOOLBAR & GRID
-   ========================================= */
+ /*  5. TABLE TOOLBAR & GRID */
 .table-toolbar {
   display: flex;
   justify-content: space-between;
@@ -429,9 +419,7 @@ body.dark-mode .active-row { color: white !important; }
   color: var(--text-secondary);
 }
 
-/* =========================================
-   6. GLOBAL BUTTONS
-   ========================================= */
+ /*  6. GLOBAL BUTTONS */
 .theme-toggle {
   background-color: transparent;
   border: 1px solid var(--border-color);
@@ -491,9 +479,7 @@ body.dark-mode .export-menu { box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
 .export-menu button:hover { background-color: var(--bg-hover); color: #001f5f; }
 body.dark-mode .export-menu button:hover { color: #3b82f6; }
 
-/* =========================================
-   7. BIG MAP MODAL & ANALYTICS 
-   ========================================= */
+  /* 7. BIG MAP MODAL & ANALYTICS */ 
 .map-modal-overlay {
   position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background-color: rgba(0, 0, 0, 0.6); z-index: 9999; display: flex; justify-content: center; align-items: center;
 }
@@ -529,9 +515,7 @@ body.dark-mode .export-menu button:hover { color: #3b82f6; }
 .stat-card.unchanged { border-bottom: 4px solid #092e52; }
 body.dark-mode .stat-card.total { border-bottom-color: #3b82f6; } 
 
-/* =========================================
-   8. LOADING OVERLAY
-   ========================================= */
+  /* 8. LOADING OVERLAY */
 .loading-overlay {
   position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background-color: var(--bg-app); opacity: 0.95; backdrop-filter: blur(5px); z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center;
 }
