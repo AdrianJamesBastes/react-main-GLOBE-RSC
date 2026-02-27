@@ -1,7 +1,7 @@
 // 1. THE DICTIONARIES
 export const siteCodes = [
   "TCFGA", "TCPHT", "TCAIC", "TCEDC", "TCIS", "TCLDC", "TCAG", "TCLBS", 
-  "TCCRE", "TCDT", "TCSBA", "TCTI"
+  "TCCRE", "TCDT", "TCSBA", "TCTI", "PTCI"
 ];
 
 export const cityToBarangayMap = {

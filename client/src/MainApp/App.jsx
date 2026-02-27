@@ -59,11 +59,11 @@ const parseLocationData = (baseName) => {
     }
   }
 
-  if (!foundCode) extracted.siteCode = ""; 
-  extracted.place = remainingString || "-";
+  if (!foundCode) extracted.siteCode = ""; // Default if no code found
+  extracted.place = remainingString || "";
 
   // 4. AUTO-FILL CITY FROM BARANGAY
-  if (extracted.city === "." && extracted.place !== "-") {
+  if (extracted.city === "." && extracted.place !== "") {
     // Clean the remaining place of telecom junk just in case the encoder only typed the barangay (e.g., BUHANGINIO)
     const cleanPlace = extracted.place.replace(/\d*(?:IO|ID|AS|CO|[XYLFWKHVZJBMNPRT])*$/i, "");
     
@@ -206,10 +206,15 @@ export default function App() {
     "Region ": geo.region, "Province": geo.province, "City/Municipality": geo.city,
     "Barangay": geo.place, "Site Address": "", "Longitude": row.lng, "Latitude": row.lat, 
     "2G": tech.g2, "4G": tech.g4, "5G": tech.g5, "Techname/BTS": row.techName, "Tech Description": "",
-    "Tech Status": "", "Site Owner": geo.siteCode, "Territory": "", "Hiroshima Severity": "", "Remarks": row.remarks, "Remarks Status": row.matchStatus
+    "Tech Status": "", 
+    
+    "Site Owner": row.siteOwner ? row.siteOwner : (geo.siteCode ? geo.siteCode : "GLOBE TELECOM"), 
+    
+    "Territory": "", "Hiroshima Severity": "", "Remarks": row.remarks, "Remarks Status": row.matchStatus
   };
-  //Forcing all values to be uppercase strings (or empty string if null/undefined)
-  return Object.fromEntries(Object.entries(rawObj).map(([k, v]) => [k, v?.toString().toUpperCase() || ""]));
+  return Object.fromEntries(
+    Object.entries(rawObj).map(([k, v]) => [k, v ? String(v).toUpperCase() : ""])
+  );
 });
 
     // 2. Create a new worksheet from our data
