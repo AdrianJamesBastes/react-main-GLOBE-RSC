@@ -3,6 +3,7 @@ import AnalyticsDashboard from '../Dashboard/AnalyticsDashboard';
 import MapVisualizer from '../Map/MapVisualizer';
 import globeLogoDark from '../assets/Globe_LogoW.png'; 
 import globeLogoLight from '../assets/Globe_LogoB.png'; 
+import * as XLSX from 'xlsx';
 
 import { provinces, cities, siteCodes, cityToProvinceMap, cityToBarangayMap, regionsToProvincesMap } from './MapDictionary/TelecomDictionaries';
 import './App.css';
@@ -188,52 +189,62 @@ export default function App() {
     });
   };
 
-  const handleSpecificExport = (exportCategory) => {
+ const handleSpecificExport = (exportCategory) => {
     setShowExportMenu(false);
     if (results.length === 0) return alert("No data to export.");
 
     const dataToExport = exportCategory === 'ALL' ? results : results.filter(row => row.matchStatus === exportCategory);
     if (dataToExport.length === 0) return alert(`There are no "${exportCategory}" sites to export.`);
 
-    const headers = [
-      "PLA_ID", "Status", "Site Code", "Region", "Province", "City", "Place", "Latitude", "Longitude",
-      "2G", "4G", "5G", "Full Techname", "Remarks"
-    ];
+  //Column Headers and Data Mapping Logic
+  const excelData = dataToExport.map(row => {
+  const geo = parseLocationData(row.baseLocation);
+  const tech = getTechSplits(row.technologySuffix);
+  
+  const rawObj = {
+    "Region": "MIN", "PLA ID": row.plaId, "PLA Status": "", "Area": "", 
+    "Region ": geo.region, "Province": geo.province, "City/Municipality": geo.city,
+    "Barangay": geo.place, "Site Address": "", "Longitude": row.lng, "Latitude": row.lat, 
+    "2G": tech.g2, "4G": tech.g4, "5G": tech.g5, "Techname/BTS": row.techName, "Tech Description": "",
+    "Tech Status": "", "Site Owner": geo.siteCode, "Territory": "", "Hiroshima Severity": "", "Remarks": row.remarks, "Remarks Status": row.matchStatus
+  };
+  //Forcing all values to be uppercase strings (or empty string if null/undefined)
+  return Object.fromEntries(Object.entries(rawObj).map(([k, v]) => [k, v?.toString().toUpperCase() || ""]));
+});
+
+    // 2. Create a new worksheet from our data
+    const worksheet = XLSX.utils.json_to_sheet(excelData);
+
+    // 3. AUTO-FIT COLUMNS LOGIC
+    // We get the headers by looking at the keys of the first object
+    const headers = Object.keys(excelData[0]);
     
-    const rows = dataToExport.map(row => {
-      const geo = parseLocationData(row.baseLocation);
-      const tech = getTechSplits(row.technologySuffix);
+    const columnWidths = headers.map(header => {
+      let maxLength = header.length; // Start with header length
       
-      return [
-        row.plaId, 
-        row.matchStatus, 
-        `"${geo.siteCode}"`,
-        `"${geo.region}"`,
-        `"${geo.province}"`,
-        `"${geo.city}"`,
-        `"${geo.place}"`,
-        row.lat, 
-        row.lng,
-        `"${tech.g2 || ""}"`,
-        `"${tech.g4 || ""}"`,
-        `"${tech.g5 || ""}"`,
-        `"${row.techName || ""}"`, 
-        `"${row.remarks || ""}"` 
-      ].join(",");
+      // Loop through every row to find the longest string in this column
+      excelData.forEach(row => {
+        const cellValue = row[header] ? row[header].toString() : "";
+        if (cellValue.length > maxLength) {
+          maxLength = cellValue.length;
+        }
+      });
+      
+      return { wch: maxLength + 2 }; // +2 for padding
     });
-    
-    const csvContent = [headers.join(","), ...rows].join("\n");
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
+
+    // Apply the calculated widths to the worksheet
+    worksheet['!cols'] = columnWidths;
+
+    // 4. Create the workbook and trigger the download
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Masterlist Data");
     
     const dateStr = new Date().toISOString().split('T')[0];
-    link.download = `StormMasterlist_${exportCategory === 'ALL' ? 'Complete' : exportCategory}_${dateStr}.csv`;
+    const fileName = `StormMasterlist_${exportCategory === 'ALL' ? 'Complete' : exportCategory}_${dateStr}.xlsx`;
     
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    // Write the file directly (This replaces all the old Blob/CSV code!)
+    XLSX.writeFile(workbook, fileName);
   };
 
   const handleScan = async () => {
