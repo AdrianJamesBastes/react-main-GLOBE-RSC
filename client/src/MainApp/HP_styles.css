@@ -40,20 +40,19 @@ body {
 .dropdownBtn {
   width: 100%;
   padding: 14px;
-  border: 2px solid #ffffff;
+  border: none;
   border-radius: 10px;
   background: white;
   color: #0072ff;
   font-size: 16px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.25s ease;
+  transition: all .6s ease;
 }
 
 .dropdownBtn:hover {
   background: #0072ff;
   color: white;
-  border-color: white; /* keep border visible */
 }
 
 .dropdownBtn:focus {
@@ -76,7 +75,7 @@ body {
   max-height: 0;
   opacity: 0;
   transform: translateY(-10px);
-  transition: max-height 0.35s ease, opacity 0.25s ease, transform 0.25s ease;
+  transition: max-height 0.35s ease, opacity 0.5s ease, transform 0.25s ease;
 }
 
 .dropdownMenu.show {
@@ -93,7 +92,7 @@ body {
   background: white;
   color: #0072ff;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.3s ease;
 }
 
 .choice:hover {
