@@ -98,7 +98,7 @@ export default function SMDashboard() {
         "Region ": (geo.region || reg) || "",
         "Province": (geo.province || row.prov) || "",
         "City/Municipality": (geo.city || row.mCity) || "",
-        "Barangay": geo.place || "",
+        "Barangay": "",
         "Site Address": row.sAdd || "",
         "Longitude": row.lng || "",
         "Latitude": row.lat || "",
@@ -169,11 +169,13 @@ export default function SMDashboard() {
              .processCSVComparison(text1, text2);
         } else {
            const mockData = [];
-           const statuses = ["UNCHANGED", "MISMATCH", "NEW", "REMOVED"];
+           // cycle through statuses in order NEW -> MISMATCH -> UNCHANGED -> REMOVED
+           // so first generated row will be NEW, then next MISMATCH, then UNCHANGED, and finally REMOVED
+           const statuses = ["NEW", "MISMATCH", "UNCHANGED", "REMOVED"];
            for(let i=1; i<=50; i++) {
              mockData.push({ 
                plaId: `MIN_${String(i).padStart(4, '0')}`, 
-               matchStatus: statuses[i % 4], 
+               matchStatus: statuses[(i-1) % statuses.length], // zero‑based index
                techName: `SITENAME${i}DDNLYK`, 
                baseLocation: `SITENAME${i}DDN`,
                technologySuffix: "LYK",
@@ -195,6 +197,9 @@ export default function SMDashboard() {
     }
   };
 
+  // define a fixed priority order for statuses so rows always appear NEW -> MISMATCH -> UNCHANGED -> REMOVED
+  const statusOrder = [ 'NEW', 'MISMATCH', 'UNCHANGED', 'REMOVED' ];
+
   const filteredResults = results.filter(row => {
     const term = searchTerm.toLowerCase();
     const matchesSearch = [row.plaId, row.techName, row.baseLocation, row.remarks]
@@ -202,6 +207,12 @@ export default function SMDashboard() {
     const matchesStatus = filterStatus === 'ALL' ? true : row.matchStatus === filterStatus;
     return matchesSearch && matchesStatus;
   }).sort((a, b) => {
+    // first sort by status priority
+    const orderA = statusOrder.indexOf(a.matchStatus);
+    const orderB = statusOrder.indexOf(b.matchStatus);
+    if (orderA !== orderB) return orderA - orderB;
+
+    // if the same status, fall back to the original baseLocation/plaId sort
     const baseA = a.baseLocation || "";
     const baseB = b.baseLocation || "";
     const baseCompare = baseA.localeCompare(baseB, undefined, { numeric: true, sensitivity: 'base' });
