@@ -1,0 +1,20 @@
+@import "../../styles/variables.css";
+/* bring in the shared storm‑masterlist rules so both dashboards stay in sync */
+@import "../StormMasterList/SM_styles.css";
+
+/* container used by App.jsx when rendering the Site Alert page */
+.sadashboard{
+    /* don't force a viewport‑sized white box – we want the same floating layout
+       as the storm masterlist. the DashboardLayout component handles sizing. */
+    background: transparent;
+    width: auto;
+    height: auto;
+    color: var(--text-primary); /* use theme colors */
+}
+
+.scan-btn {
+    /* push the button slightly below the upload box instead of huge bottom gap */
+    margin-top: 1.5rem;
+    /* remove any accidental huge bottom margin from previous edits */
+    margin-bottom: 0;
+}
