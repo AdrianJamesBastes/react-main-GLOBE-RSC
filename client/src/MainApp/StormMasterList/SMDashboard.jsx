@@ -1,27 +1,30 @@
-import { useState, useEffect } from 'react';
-import AnalyticsDashboard from '../Dashboard/AnalyticsDashboard';
-import MapVisualizer from '../Map/MapVisualizer';
-import globeLogoDark from '../assets/Globe_LogoW.png'; 
-import globeLogoLight from '../assets/Globe_LogoB.png'; 
-import checkDark from '../assets/checkDark.png';
-import checkLight from '../assets/checkLight.png';
-import verifiedDark from '../assets/verifiedDark.png';
-import verifiedLight from '../assets/verifiedLight.png';
-import glitterDark from '../assets/glitterDark.png';
-import glitterLight from '../assets/glitterLight.png';
-import removedDark from '../assets/removedDark.png';
-import removedLight from '../assets/removedLight.png';
-import warningDark from '../assets/warningDark.png';
-import warningLight from '../assets/warningLight.png';
-import search from '../assets/search.png';
-import fileDark from '../assets/fileDark.png';
-import fileLight from '../assets/fileLight.png';
+import { useState } from 'react';
+// LoadingScreen was unused and removed
+import useDarkMode from '../../hooks/useDarkMode';
+import AnalyticsDashboard from '../../Dashboard/AnalyticsDashboard';
+import MapVisualizer from '../../Map/MapVisualizer';
+import globeLogoDark from '../../assets/Globe_LogoW.png';
+import globeLogoLight from '../../assets/Globe_LogoB.png';
+import checkDark from '../../assets/checkDark.png';
+import checkLight from '../../assets/checkLight.png';
+import verifiedDark from '../../assets/verifiedDark.png';
+import verifiedLight from '../../assets/verifiedLight.png';
+import glitterDark from '../../assets/glitterDark.png';
+import glitterLight from '../../assets/glitterLight.png';
+import removedDark from '../../assets/removedDark.png';
+import removedLight from '../../assets/removedLight.png';
+import warningDark from '../../assets/warningDark.png';
+import warningLight from '../../assets/warningLight.png';
+import search from '../../assets/search.png';
+import fileDark from '../../assets/fileDark.png';
+import fileLight from '../../assets/fileLight.png';
 
 import * as XLSX from 'xlsx';
-
 import { useNavigate } from "react-router-dom";
 
-import { provinces, cities, siteCodes, cityToProvinceMap, cityToBarangayMap, regionsToProvincesMap } from './MapDictionary/TelecomDictionaries';
+import { parseLocationData, getTechSplits, getShortRegionByProvince } from '../../utils/telecom';
+import DashboardLayout from '../../components/DashboardLayout';
+import '../../styles/Dashboard_styles.css';
 import './SM_styles.css';
 
 const ICONS = {
@@ -40,109 +43,7 @@ const ICONS = {
   fileLight
 };
 
-
-// ============================================================================
-// HELPER 1: TELECOM GEOGRAPHIC PARSER
-// ============================================================================
-const parseLocationData = (baseName) => {
-  if (!baseName) return { siteCode: "", place: "", city: "", province: "", region: "" };
-
-  let remainingString = baseName.toUpperCase().trim();
-  const provKeys = Object.keys(provinces).sort((a, b) => b.length - a.length);
-  const cityKeys = Object.keys(cities).sort((a, b) => b.length - a.length);
-  let extracted = { siteCode: "", place: "", city: "", province: "", region: "" };
-
-  for (const prov of provKeys) {
-    const regex = new RegExp(`${prov}(\\d+)?((?:IO|ID|AS|CO|[XYLFWKHVZJBMNPRT])*)$`, "i");
-    const match = remainingString.match(regex);
-    if (match) {
-      extracted.province = provinces[prov];
-      remainingString = remainingString.slice(0, remainingString.length - match[0].length);
-      break;
-    }
-  }
-
-  for (const cityKey of cityKeys) {
-    const cityName = cities[cityKey];
-    const provinceOfCity = cityToProvinceMap[cityName];
-    if (!provinceOfCity || (extracted.province && provinceOfCity !== extracted.province)) continue;
-    const regex = new RegExp(`${cityKey}(\\d+)?((?:IO|ID|AS|CO|[XYLFWKHVZJBMNPRT])*)$`, "i");
-    const match = remainingString.match(regex);
-    if (match) {
-      extracted.city = cityName;
-      remainingString = remainingString.slice(0, remainingString.length - match[0].length);
-      break;
-    }
-  }
-
-  const sortedCodes = [...siteCodes].sort((a, b) => b.length - a.length);
-  for (const code of sortedCodes) {
-    if (remainingString.startsWith(code)) {
-      extracted.siteCode = code;
-      remainingString = remainingString.slice(code.length);
-      break;
-    }
-  }
-
-  extracted.place = remainingString.trim();
-
-  if (!extracted.city && extracted.place) {
-    const cleanPlace = extracted.place.replace(/\d*(?:IO|ID|AS|CO|[XYLFWKHVZJBMNPRT])*$/i, "").trim().toUpperCase();
-    for (const [city, barangays] of Object.entries(cityToBarangayMap)) {
-      const provinceOfCity = cityToProvinceMap[city];
-      if (extracted.province && provinceOfCity !== extracted.province) continue;
-      if (barangays.map(b => b.toUpperCase()).includes(cleanPlace)) {
-        extracted.city = city;
-        extracted.place = cleanPlace;
-        break;
-      }
-    }
-  }
-
-  if (!extracted.province && extracted.city) extracted.province = cityToProvinceMap[extracted.city] || "";
-  if (extracted.province) {
-    for (const [regionName, provinceArray] of Object.entries(regionsToProvincesMap)) {
-      if (provinceArray.includes(extracted.province)) {
-        extracted.region = regionName;
-        break;
-      }
-    }
-  }
-  return extracted;
-};
-
-// ============================================================================
-// HELPER 2: TECHNOLOGY SPLITTER
-// ============================================================================
-const getTechSplits = (suffix) => {
-  const s = (suffix || "").toUpperCase();
-  let res = { g2: "", g4: "", g5: "" };
-
-  if (!s || /^(?:ID|AS)+$/i.test(s)) res.g2 = "YES";
-
-  for (let char of s) {
-    if ("MNPRT".includes(char)) res.g5 += char;
-    else if ("FHLKWYVB".includes(char)) res.g4 += char;
-    else if (char === "X") res.g2 = "X";
-  }
-  return res;
-};
-
-// ============================================================================
-// MAIN COMPONENT
-// ============================================================================
-function LoadingScreen({ logo }) {
-  return (
-    <div className="loading-overlay">
-      <div className="spinner-box">
-        <div className="spinner-ripple"></div>
-        <div className="spinner-ring"></div>
-        <img src={logo} alt="Loading..." className="loading-logo" />
-      </div>
-      <p className="loading-text">Loading...</p>
-    </div>
-  );
-}
+// Helpers moved to utils/telecom.js and imported above
 
 export default function SMDashboard() {
   const [monitorFile1, setMonitorFile1] = useState(null);
@@ -151,10 +52,7 @@ export default function SMDashboard() {
   const [results, setResults] = useState([]);
 
   const navigate = useNavigate();
-  
-  const [isDarkMode, setIsDarkMode] = useState(
-    window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
-  );
+  const [isDarkMode, toggleTheme] = useDarkMode();
   const [showPreviewMenu, setShowPreviewMenu] = useState(false);
   const [filterStatus, setFilterStatus] = useState('ALL');
   const [searchTerm, setSearchTerm] = useState("");
@@ -164,12 +62,6 @@ export default function SMDashboard() {
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [selectedRowDetails, setSelectedRowDetails] = useState(null);
 
-  useEffect(() => {
-    if (isDarkMode) document.body.classList.add('dark-mode');
-    else document.body.classList.remove('dark-mode');
-  }, [isDarkMode]);
-
-  const toggleTheme = () => setIsDarkMode(prev => !prev);
   const currentLogo = isDarkMode ? globeLogoDark : globeLogoLight;
 
   const handleFileChange = (e, setFileState) => {
@@ -180,19 +72,10 @@ export default function SMDashboard() {
   const readFileAsText = (file) => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onload = (e) => resolve(e.target.result);
-      reader.onerror = (e) => reject(e);
+      reader.onload = (evt) => resolve(evt.target.result);
+      reader.onerror = reject;
       reader.readAsText(file);
     });
-  };
-
-  const getShortRegionByProvince = (province) => {
-    if (!province) return "";
-    province = province.toUpperCase().trim();
-    for (const [regionName, provinces] of Object.entries(regionsToProvincesMap)) {
-      if (provinces.includes(province)) return regionName; 
-    }
-    return ""; 
   };
 
   const handleSpecificExport = (exportCategory) => {
@@ -252,6 +135,8 @@ export default function SMDashboard() {
     const dateStr = new Date().toISOString().split('T')[0];
     const fileName = `StormMasterlist_${exportCategory === 'ALL' ? 'Complete' : exportCategory}_${dateStr}.xlsx`;
     
+    XLSX.writeFile(workbook, fileName);
+
     XLSX.writeFile(workbook, fileName);
   };
 
@@ -346,37 +231,60 @@ export default function SMDashboard() {
     }, 1000); // simulate loading
   };
 
-  return (
-    <div className="app-container">
-      {isLoading && <LoadingScreen logo={currentLogo} />}
+  const headerActions = (
+    <div className="header-actions" style={{ display: 'flex', gap: '10px' }}>
+      <button className="btn theme-toggle" onClick={toggleTheme} title="Toggle Theme" aria-label="Toggle theme">
+        {isDarkMode ? (
+          <>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+              <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" fill="currentColor" />
+            </svg>
+            <span> Light</span>
+          </>
+        ) : (
+          <>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+              <circle cx="12" cy="12" r="3.5" fill="currentColor" />
+              <g stroke="currentColor" strokeWidth="1.2">
+                <path d="M12 2v2" strokeLinecap="round" />
+                <path d="M12 20v2" strokeLinecap="round" />
+                <path d="M4.93 4.93l1.41 1.41" strokeLinecap="round" />
+                <path d="M17.66 17.66l1.41 1.41" strokeLinecap="round" />
+                <path d="M2 12h2" strokeLinecap="round" />
+                <path d="M20 12h2" strokeLinecap="round" />
+                <path d="M4.93 19.07l1.41-1.41" strokeLinecap="round" />
+                <path d="M17.66 6.34l1.41-1.41" strokeLinecap="round" />
+              </g>
+            </svg>
+            <span> Dark</span>
+          </>
+        )}
+      </button>
 
-      <header className="top-bar">
-        <div className="logo-section">
-          <img className="globe-logo" onClick={() => handleNavigate("/")} src={currentLogo} alt="Globe Logo" />
-        </div>
-        
-        <div className="header-actions" style={{ display: 'flex', gap: '10px' }}>
-          <button className="btn theme-toggle" onClick={toggleTheme} title="Toggle Theme">
-            {isDarkMode ? "☀️ Light" : "🌙 Dark"}
-          </button>
-
-          <div className="export-dropdown-container" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setShowExportMenu(false); }} tabIndex={-1}>
-            <button className="btn primary-outline export-toggle-btn" onClick={() => setShowExportMenu(!showExportMenu)}>
-              Export Data ▾
-            </button>
-            {showExportMenu && (
-              <div className="export-menu">
-                <button onClick={() => handleSpecificExport('ALL')}>Storm Masterlist</button>
-                <button onClick={() => handleSpecificExport('NEW')}>New Sites Only</button>
-                <button onClick={() => handleSpecificExport('REMOVED')}>Removed Only</button>
-                <button onClick={() => handleSpecificExport('MISMATCH')}>Mismatches Only</button>
-                <button onClick={() => handleSpecificExport('UNCHANGED')}>Unchanged Only</button>
-              </div>
-            )}
+      <div className="export-dropdown-container" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setShowExportMenu(false); }} tabIndex={-1}>
+        <button className="btn primary-outline export-toggle-btn" onClick={() => setShowExportMenu(!showExportMenu)}>
+          Export Data 
+        </button>
+        {showExportMenu && (
+          <div className="export-menu">
+            <button onClick={() => handleSpecificExport('ALL')}>Storm Masterlist</button>
+            <button onClick={() => handleSpecificExport('NEW')}>New Sites Only</button>
+            <button onClick={() => handleSpecificExport('REMOVED')}>Removed Only</button>
+            <button onClick={() => handleSpecificExport('MISMATCH')}>Mismatches Only</button>
+            <button onClick={() => handleSpecificExport('UNCHANGED')}>Unchanged Only</button>
           </div>
-        </div>
-      </header>
+        )}
+      </div>
+    </div>
+  );
 
+  return (
+    <DashboardLayout
+      isLoading={isLoading}
+      logo={currentLogo}
+      onLogoClick={() => handleNavigate("/")}
+      headerActions={headerActions}
+    >
       <main className="main-layout">
         <aside className="sidebar">
           <div className="sidebar-top-section">
@@ -408,7 +316,7 @@ export default function SMDashboard() {
 
               <div className="carousel-panel">
                 <div className="details-header">
-                  <button className="back-btn" onClick={() => setSelectedRowDetails(null)}>←</button>
+                  <button className="back-btn" onClick={() => setSelectedRowDetails(null)}></button>
                   <h3 style={{ margin: 0, fontSize: '1.2rem' }}>Site Details</h3>
                 </div>
                 
@@ -454,7 +362,14 @@ export default function SMDashboard() {
           <div className="sidebar-map-wrapper">
             <div className="map-floating-header">
               <span className="floating-title">Site Visualizer</span>
-              <button className="floating-btn" onClick={() => setShowBigMap(true)}>⤢</button>
+              <button className="floating-btn" onClick={() => setShowBigMap(true)} aria-label="Expand map">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+                  <path d="M4 8V4h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M20 16v4h-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M20 8h-4V4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M8 20H4v-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
             </div>
             <div className="mini-map">
               <MapVisualizer selectedSite={selectedSite} filteredResults={filteredResults} isExpanded={false} />
@@ -464,11 +379,8 @@ export default function SMDashboard() {
 
         <section className="content-area">
           <div className="output-card">
-            
             <div className="dashboard-container">
               <AnalyticsDashboard data={results} activeFilter={filterStatus} onFilterChange={setFilterStatus} isDarkMode={isDarkMode} />
-              
-              {/* THE SYNCED CARDS */}
               <div className="cards-section">
                 <div className={`stat-card total ${filterStatus === 'ALL' ? 'active' : ''}`} onClick={() => setFilterStatus('ALL')} style={{cursor: 'pointer'}}>
                   <img src={isDarkMode ? ICONS.checkDark : ICONS.checkLight} className="stat-icon" alt="Total" />
@@ -502,7 +414,6 @@ export default function SMDashboard() {
               </div>
             </div>
 
-            {/* THE NEW PREVIEW DROPDOWN & SEARCH BAR */}
             <div className="table-toolbar">
               <div 
                 className="preview-dropdown-container" 
@@ -515,9 +426,9 @@ export default function SMDashboard() {
                   disabled={results.length === 0}
                   style={{ opacity: results.length === 0 ? 0.5 : 1, cursor: results.length === 0 ? 'not-allowed' : 'pointer' }}
                 >
-                  Preview Data: <span style={{fontWeight: 'bold', color: 'var(--brand-purple)'}}>{getPreviewLabel(filterStatus)}</span> ▾
+                  Preview Data: <span style={{fontWeight: 'bold', color: 'var(--brand-purple)'}}>{getPreviewLabel(filterStatus)}</span> 
                 </button>
-                
+
                 {showPreviewMenu && (
                   <div className="preview-menu">
                     <button onClick={() => { setFilterStatus('ALL'); setShowPreviewMenu(false); }}>Storm Masterlist</button>
@@ -543,7 +454,6 @@ export default function SMDashboard() {
               />
             </div>  {/* end toolbar */}
 
-            {/* --- CONDITIONALLY SHOW TABLE OR PLACEHOLDER --- */}
             <div className="output-box">
               {results.length > 0 ? (
                 <div className="table-wrapper">
@@ -656,7 +566,7 @@ export default function SMDashboard() {
           <div className="map-modal-content">
             <div className="map-modal-header">
               <h3>Site Location: {selectedSite.id || "Region Map"}</h3>
-              <button className="close-btn" onClick={() => setShowBigMap(false)}>✖ Close</button>
+              <button className="close-btn" onClick={() => setShowBigMap(false)}> Close</button>
             </div>
             <div className="big-map-wrapper">
               <MapVisualizer selectedSite={selectedSite} filteredResults={filteredResults} isExpanded={true} />
@@ -664,6 +574,6 @@ export default function SMDashboard() {
           </div>
         </div>
       )}
-    </div>
+    </DashboardLayout>
   );
 }
