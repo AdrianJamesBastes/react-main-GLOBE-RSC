@@ -1,6 +1,6 @@
-import HomePage from './HomePage/Home_Page';
-import SMDashboard from './StormMasterList/SMDashboard';
-import SADashboard from './SiteAlert/SADashboard';
+import HomePage from './Home_Page';
+import SMDashboard from './SMDashboard';
+import SADashboard from './SADashboard';
 import { HashRouter as Router, Routes, Route } from "react-router-dom";
 
 export default function App() {

@@ -11,7 +11,7 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
-const getCustomIcon = (status, isSelected, duplicateCount = 1) => {
+export const getCustomIcon = (status, isSelected, duplicateCount = 1) => {
   let bgColor = '#5e5e5d'; 
   if (status === 'NEW') bgColor = '#28a745'; 
   if (status === 'REMOVED') bgColor = '#dc3545'; 

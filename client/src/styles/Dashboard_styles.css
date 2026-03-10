@@ -1,3 +1,0 @@
-/* Shared dashboard stylesheet. Imports the Storm Master List rules, which themselves
-   pull in the variables file. Any additional global dashboard rules can go here. */
-@import "../MainApp/StormMasterList/SM_styles.css";
