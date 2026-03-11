@@ -23,6 +23,8 @@ import * as XLSX from 'xlsx';
 import { useNavigate } from "react-router-dom";
 
 import { parseLocationData, getTechSplits, getShortRegionByProvince } from '../../utils/telecom';
+// Add this exact line right here:
+import { cityToProvinceMap } from '../MapDictionary/TelecomDictionaries';
 import DashboardLayout from '../../components/DashboardLayout';
 import '../../styles/Dashboard_styles.css';
 import './SM_styles.css';
@@ -88,7 +90,23 @@ export default function SMDashboard() {
     const excelData = dataToExport.map(row => {
       const geo = parseLocationData(row.baseLocation);
       const tech = getTechSplits(row.technologySuffix);
-      const reg = getShortRegionByProvince(row.prov);
+      
+      // FALLBACK 1: Try raw UDM province
+      let reg = getShortRegionByProvince(row.prov);
+
+      // FALLBACK 2: Try parsed Site Name province
+      if (!reg && geo.province) {
+        reg = getShortRegionByProvince(geo.province);
+      }
+
+      // FALLBACK 3: If still blank, use the UDM City to guess the Province, then get the Region!
+      if (!reg && row.mCity) {
+        const cleanCity = String(row.mCity).toUpperCase().trim();
+        const fallbackProv = cityToProvinceMap[cleanCity];
+        if (fallbackProv) {
+          reg = getShortRegionByProvince(fallbackProv);
+        }
+      }
 
       return {
         "Region": "MIN",
@@ -135,8 +153,6 @@ export default function SMDashboard() {
     const dateStr = new Date().toISOString().split('T')[0];
     const fileName = `StormMasterlist_${exportCategory === 'ALL' ? 'Complete' : exportCategory}_${dateStr}.xlsx`;
     
-    XLSX.writeFile(workbook, fileName);
-
     XLSX.writeFile(workbook, fileName);
   };
 
