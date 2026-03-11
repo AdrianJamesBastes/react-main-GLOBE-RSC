@@ -23,8 +23,11 @@ import * as XLSX from 'xlsx';
 import { useNavigate } from "react-router-dom";
 
 import { parseLocationData, getTechSplits, getShortRegionByProvince } from '../../utils/telecom';
+<<<<<<< HEAD
 // Add this exact line right here:
 import { cityToProvinceMap } from '../MapDictionary/TelecomDictionaries';
+=======
+>>>>>>> upstream/updates
 import DashboardLayout from '../../components/DashboardLayout';
 import '../../styles/Dashboard_styles.css';
 import './SM_styles.css';
@@ -113,9 +116,15 @@ export default function SMDashboard() {
         "PLA ID": row.plaId || "",
         "PLA Status": "",
         "Area": row.sArea || "",
+<<<<<<< HEAD
         "Region ": (geo.region || reg) || "",
         "Province": (geo.province || row.prov) || "",
         "City/Municipality": (geo.city || row.mCity) || "",
+=======
+        "Region ": (row.region || geo.region) || "",
+        "Province": (row.prov || geo.province) || "",
+        "City/Municipality": (row.mCity || geo.city) || "",
+>>>>>>> upstream/updates
         "Barangay": "",
         "Site Address": row.sAdd || "",
         "Longitude": row.lng || "",
@@ -126,7 +135,7 @@ export default function SMDashboard() {
         "Techname/BTS": row.techName || "",
         "Tech Description": "",
         "Tech Status": "",
-        "Site Owner": row.siteOwner || geo.siteCode || "GLOBE TELECOM",
+        "Site Owner": row.twrC || geo.siteCode || "GLOBE TELECOM",
         "Territory": row.trt || "",
         "Hiroshima Severity": row.hSvr || "",
         "Remarks": row.remarks || "",

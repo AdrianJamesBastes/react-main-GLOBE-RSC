@@ -88,9 +88,15 @@ export default function SADashboard() {
         "PLA ID": row.plaId || "",
         "PLA Status": "",
         "Area": row.sArea || "",
+<<<<<<< HEAD
         "Region ": (reg || geo.region) || "",
         "Province": (row.prov || geo.province) || "",
         "City/Municipality": (row.mCity || geo.city) || "",
+=======
+        "Region ": (geo.region || reg) || "",
+        "Province": (geo.province || row.prov) || "",
+        "City/Municipality": (geo.city || row.mCity) || "",
+>>>>>>> upstream/updates
         "Barangay": geo.place || "",
         "Site Address": row.sAdd || "",
         "Longitude": row.lng || "",
