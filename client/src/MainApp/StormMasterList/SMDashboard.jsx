@@ -1,5 +1,4 @@
 import { useState } from 'react';
-// LoadingScreen was unused and removed
 import useDarkMode from '../../hooks/useDarkMode';
 import AnalyticsDashboard from '../../Dashboard/AnalyticsDashboard';
 import MapVisualizer from '../../Map/MapVisualizer';
@@ -22,12 +21,9 @@ import fileLight from '../../assets/fileLight.png';
 import * as XLSX from 'xlsx';
 import { useNavigate } from "react-router-dom";
 
-import { parseLocationData, getTechSplits, getShortRegionByProvince } from '../../utils/telecom';
-<<<<<<< HEAD
-// Add this exact line right here:
+// Note: getTechSplits is removed because we unpivot the columns now
+import { parseLocationData, getShortRegionByProvince } from '../../utils/telecom';
 import { cityToProvinceMap } from '../MapDictionary/TelecomDictionaries';
-=======
->>>>>>> upstream/updates
 import DashboardLayout from '../../components/DashboardLayout';
 import '../../styles/Dashboard_styles.css';
 import './SM_styles.css';
@@ -47,8 +43,6 @@ const ICONS = {
   fileDark,
   fileLight
 };
-
-// Helpers moved to utils/telecom.js and imported above
 
 export default function SMDashboard() {
   const [monitorFile1, setMonitorFile1] = useState(null);
@@ -83,16 +77,36 @@ export default function SMDashboard() {
     });
   };
 
-  const handleSpecificExport = (exportCategory) => {
+const handleSpecificExport = (exportCategory) => {
     setShowExportMenu(false);
     if (results.length === 0) return alert("No data to export.");
 
-    const dataToExport = exportCategory === 'ALL' ? results : results.filter(row => row.matchStatus === exportCategory);
+    // NEW LOGIC: If exporting 'ALL', filter out the 'REMOVED' sites!
+    const dataToExport = exportCategory === 'ALL' 
+      ? results.filter(row => row.matchStatus !== 'REMOVED') 
+      : results.filter(row => row.matchStatus === exportCategory);
+
     if (dataToExport.length === 0) return alert(`There are no "${exportCategory}" sites to export.`);
 
-    const excelData = dataToExport.map(row => {
+    // --- NEW: Custom Sorting Logic for the Excel File ---
+    const exportStatusOrder = ['NEW', 'MISMATCH', 'REMOVED', 'UNCHANGED'];
+    
+    dataToExport.sort((a, b) => {
+      // 1. Sort by your specific Status priority
+      const orderA = exportStatusOrder.indexOf(a.matchStatus);
+      const orderB = exportStatusOrder.indexOf(b.matchStatus);
+      if (orderA !== orderB) return orderA - orderB;
+
+      // 2. If they have the same Status, sort them alphabetically by Base Name
+      const baseA = a.baseLocation || "";
+      const baseB = b.baseLocation || "";
+      return baseA.localeCompare(baseB, undefined, { numeric: true, sensitivity: 'base' });
+    });
+    // ---------------------------------------------------
+
+    // FlatMap unpivots the rows to match your new template!
+    const excelData = dataToExport.flatMap(row => {
       const geo = parseLocationData(row.baseLocation);
-      const tech = getTechSplits(row.technologySuffix);
       
       // FALLBACK 1: Try raw UDM province
       let reg = getShortRegionByProvince(row.prov);
@@ -102,7 +116,7 @@ export default function SMDashboard() {
         reg = getShortRegionByProvince(geo.province);
       }
 
-      // FALLBACK 3: If still blank, use the UDM City to guess the Province, then get the Region!
+      // FALLBACK 3: City guess
       if (!reg && row.mCity) {
         const cleanCity = String(row.mCity).toUpperCase().trim();
         const fallbackProv = cityToProvinceMap[cleanCity];
@@ -111,28 +125,20 @@ export default function SMDashboard() {
         }
       }
 
-      return {
+      const buildExcelRow = (techLabel, specificTechName) => ({
         "Region": "MIN",
         "PLA ID": row.plaId || "",
         "PLA Status": "",
         "Area": row.sArea || "",
-<<<<<<< HEAD
-        "Region ": (geo.region || reg) || "",
-        "Province": (geo.province || row.prov) || "",
-        "City/Municipality": (geo.city || row.mCity) || "",
-=======
-        "Region ": (row.region || geo.region) || "",
+        "Region ": (row.region || geo.region || reg) || "",
         "Province": (row.prov || geo.province) || "",
-        "City/Municipality": (row.mCity || geo.city) || "",
->>>>>>> upstream/updates
+        "Municipality": (row.mCity || geo.city) || "",
         "Barangay": "",
         "Site Address": row.sAdd || "",
         "Longitude": row.lng || "",
         "Latitude": row.lat || "",
-        "2G": tech.g2 || "",
-        "4G": tech.g4 || "",
-        "5G": tech.g5 || "",
-        "Techname/BTS": row.techName || "",
+        "Technology": techLabel,            
+        "Tech Name/ BTS": specificTechName, 
         "Tech Description": "",
         "Tech Status": "",
         "Site Owner": row.twrC || geo.siteCode || "GLOBE TELECOM",
@@ -140,7 +146,29 @@ export default function SMDashboard() {
         "Hiroshima Severity": row.hSvr || "",
         "Remarks": row.remarks || "",
         "Remarks Status": row.matchStatus || ""
-      };
+      });
+
+      let expandedRows = [];
+
+      // If REMOVED, no NMS strings exist
+      if (row.matchStatus === 'REMOVED') {
+        expandedRows.push(buildExcelRow("UDM Only", row.techName));
+      } else {
+        if (row.original2G) {
+          row.original2G.split(" | ").forEach(nmsName => expandedRows.push(buildExcelRow("2G", nmsName)));
+        }
+        if (row.original4G) {
+          row.original4G.split(" | ").forEach(nmsName => expandedRows.push(buildExcelRow("4G", nmsName)));
+        }
+        if (row.original5G) {
+          row.original5G.split(" | ").forEach(nmsName => expandedRows.push(buildExcelRow("5G", nmsName)));
+        }
+        if (expandedRows.length === 0) {
+          expandedRows.push(buildExcelRow("Unknown", row.techName));
+        }
+      }
+
+      return expandedRows;
     });
 
     const worksheet = XLSX.utils.json_to_sheet(excelData);
@@ -194,13 +222,11 @@ export default function SMDashboard() {
              .processCSVComparison(text1, text2);
         } else {
            const mockData = [];
-           // cycle through statuses in order NEW -> MISMATCH -> UNCHANGED -> REMOVED
-           // so first generated row will be NEW, then next MISMATCH, then UNCHANGED, and finally REMOVED
            const statuses = ["NEW", "MISMATCH", "UNCHANGED", "REMOVED"];
            for(let i=1; i<=50; i++) {
              mockData.push({ 
                plaId: `MIN_${String(i).padStart(4, '0')}`, 
-               matchStatus: statuses[(i-1) % statuses.length], // zero‑based index
+               matchStatus: statuses[(i-1) % statuses.length], 
                techName: `SITENAME${i}DDNLYK`, 
                baseLocation: `SITENAME${i}DDN`,
                technologySuffix: "LYK",
@@ -222,7 +248,6 @@ export default function SMDashboard() {
     }
   };
 
-  // define a fixed priority order for statuses so rows always appear NEW -> MISMATCH -> UNCHANGED -> REMOVED
   const statusOrder = [ 'NEW', 'MISMATCH', 'UNCHANGED', 'REMOVED' ];
 
   const filteredResults = results.filter(row => {
@@ -232,12 +257,10 @@ export default function SMDashboard() {
     const matchesStatus = filterStatus === 'ALL' ? true : row.matchStatus === filterStatus;
     return matchesSearch && matchesStatus;
   }).sort((a, b) => {
-    // first sort by status priority
     const orderA = statusOrder.indexOf(a.matchStatus);
     const orderB = statusOrder.indexOf(b.matchStatus);
     if (orderA !== orderB) return orderA - orderB;
 
-    // if the same status, fall back to the original baseLocation/plaId sort
     const baseA = a.baseLocation || "";
     const baseB = b.baseLocation || "";
     const baseCompare = baseA.localeCompare(baseB, undefined, { numeric: true, sensitivity: 'base' });
@@ -264,7 +287,7 @@ export default function SMDashboard() {
     setIsLoading(true);
     setTimeout(() => {
       navigate(path);
-    }, 1000); // simulate loading
+    }, 1000); 
   };
 
   const headerActions = (
@@ -488,7 +511,7 @@ export default function SMDashboard() {
                   cursor: results.length === 0 ? 'not-allowed' : 'text' 
                 }}
               />
-            </div>  {/* end toolbar */}
+            </div>
 
             <div className="output-box">
               {results.length > 0 ? (
@@ -500,7 +523,7 @@ export default function SMDashboard() {
                         <th>Status</th>
                         <th>Base Name</th>
                         <th style={{color: '#1a73e8'}}>Technology</th>
-                        <th style={{color: '#1a73e8'}}>NMS Techname</th>
+                        <th style={{color: '#1a73e8'}}>BCF NAME</th>
                         <th>Remarks</th>
                       </tr>
                     </thead>
@@ -536,7 +559,7 @@ export default function SMDashboard() {
                         ];
                         
                         if (subRows.length === 0) {
-                          subRows.push({ techGen: "UDM Only", nmsName: row.techName });
+                          subRows.push({ techGen: "", nmsName: row.techName });
                         }
 
                         return subRows.map((sub, j) => {

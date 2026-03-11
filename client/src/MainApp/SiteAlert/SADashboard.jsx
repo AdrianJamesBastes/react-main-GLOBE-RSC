@@ -21,7 +21,10 @@ import fileLight from '../../assets/fileLight.png';
 import * as XLSX from 'xlsx';
 import { useNavigate } from "react-router-dom";
 
-import { parseLocationData, getTechSplits, getShortRegionByProvince } from '../../utils/telecom';
+// Removed getTechSplits since we do vertical rows now!
+import { parseLocationData, getShortRegionByProvince } from '../../utils/telecom';
+// Added the dictionary import so your Triple Fallback works!
+import { cityToProvinceMap } from '../MapDictionary/TelecomDictionaries';
 import DashboardLayout from '../../components/DashboardLayout';
 import '../../styles/Dashboard_styles.css';
 //import './SM_styles.css';
@@ -78,33 +81,40 @@ export default function SADashboard() {
     const dataToExport = exportCategory === 'ALL' ? results : results.filter(row => row.matchStatus === exportCategory);
     if (dataToExport.length === 0) return alert(`There are no "${exportCategory}" sites to export.`);
 
-    const excelData = dataToExport.map(row => {
+    // Using flatMap to create multiple rows per site based on Technology!
+    const excelData = dataToExport.flatMap(row => {
       const geo = parseLocationData(row.baseLocation);
-      const tech = getTechSplits(row.technologySuffix);
-      const reg = getShortRegionByProvince(row.prov);
+      
+      // FALLBACK 1: Try raw UDM province
+      let reg = getShortRegionByProvince(row.prov);
 
-      return {
+      // FALLBACK 2: Try parsed Site Name province
+      if (!reg && geo.province) {
+        reg = getShortRegionByProvince(geo.province);
+      }
+
+      // FALLBACK 3: City guess
+      if (!reg && row.mCity) {
+        const cleanCity = String(row.mCity).toUpperCase().trim();
+        const fallbackProv = cityToProvinceMap[cleanCity];
+        if (fallbackProv) reg = getShortRegionByProvince(fallbackProv);
+      }
+
+      // HELPER: This creates the exact Excel row structure you want
+      const buildExcelRow = (techLabel, specificTechName) => ({
         "Region": "MIN",
         "PLA ID": row.plaId || "",
         "PLA Status": "",
         "Area": row.sArea || "",
-<<<<<<< HEAD
-        "Region ": (reg || geo.region) || "",
-        "Province": (row.prov || geo.province) || "",
-        "City/Municipality": (row.mCity || geo.city) || "",
-=======
         "Region ": (geo.region || reg) || "",
         "Province": (geo.province || row.prov) || "",
         "City/Municipality": (geo.city || row.mCity) || "",
->>>>>>> upstream/updates
-        "Barangay": geo.place || "",
+        "Barangay": "",
         "Site Address": row.sAdd || "",
         "Longitude": row.lng || "",
         "Latitude": row.lat || "",
-        "2G": tech.g2 || "",
-        "4G": tech.g4 || "",
-        "5G": tech.g5 || "",
-        "Techname/BTS": row.techName || "",
+        "Technology": techLabel,            // <--- Outputting the 2G/4G/5G label
+        "Tech Name/ BTS": specificTechName, // <--- Outputting the specific string
         "Tech Description": "",
         "Tech Status": "",
         "Site Owner": row.siteOwner || geo.siteCode || "GLOBE TELECOM",
@@ -112,12 +122,40 @@ export default function SADashboard() {
         "Hiroshima Severity": row.hSvr || "",
         "Remarks": row.remarks || "",
         "Remarks Status": row.matchStatus || ""
-      };
+      });
+
+      let expandedRows = [];
+
+      // SCENARIO A: If the site was REMOVED, it only exists in UDM, so it has no NMS splits.
+      if (row.matchStatus === 'REMOVED') {
+        expandedRows.push(buildExcelRow("UDM Only", row.techName));
+      } 
+      // SCENARIO B: Split the NMS strings into vertical rows!
+      else {
+        // Look for the original strings sent from the backend and split them by the " | " separator
+        if (row.original2G) {
+          row.original2G.split(" | ").forEach(nmsName => expandedRows.push(buildExcelRow("2G", nmsName)));
+        }
+        if (row.original4G) {
+          row.original4G.split(" | ").forEach(nmsName => expandedRows.push(buildExcelRow("4G", nmsName)));
+        }
+        if (row.original5G) {
+          row.original5G.split(" | ").forEach(nmsName => expandedRows.push(buildExcelRow("5G", nmsName)));
+        }
+        
+        // Safety net: If a row somehow has no tech strings, just print the base name.
+        if (expandedRows.length === 0) {
+          expandedRows.push(buildExcelRow("Unknown", row.techName));
+        }
+      }
+
+      return expandedRows; // flatMap merges all these into the main Excel sheet!
     });
 
     const worksheet = XLSX.utils.json_to_sheet(excelData);
     const headers = Object.keys(excelData[0]);
     
+    // Auto-size the Excel columns
     const columnWidths = headers.map(header => {
       let maxLength = header.length; 
       excelData.forEach(row => {
@@ -131,11 +169,10 @@ export default function SADashboard() {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Masterlist Data");
     
+    // Generate the file name with today's date
     const dateStr = new Date().toISOString().split('T')[0];
     const fileName = `StormMasterlist_${exportCategory === 'ALL' ? 'Complete' : exportCategory}_${dateStr}.xlsx`;
     
-    XLSX.writeFile(workbook, fileName);
-
     XLSX.writeFile(workbook, fileName);
   };
 

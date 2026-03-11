@@ -83,27 +83,17 @@ export function getTechSplits(suffix) {
   return res;
 }
 
-<<<<<<< HEAD
 export const getShortRegionByProvince = (province) => {
   if (!province) return "";
-  
+
   const cleanProvince = String(province).toUpperCase().trim();
 
   for (const [region, provincesList] of Object.entries(regionsToProvincesMap)) {
-    // Now it compares the cleaned string against your all-caps dictionary
+    // compare against normalized province values
     if (provincesList.includes(cleanProvince)) {
       return region;
     }
   }
-  
-  return ""; 
-};
-=======
-export function getShortRegionByProvince(provName) {
-  if (!provName) return "";
-  for (const [regionShort, provList] of Object.entries(regionsToProvincesMap)) {
-    if (provList.includes(provName)) return regionShort;
-  }
+
   return "";
-}
->>>>>>> upstream/updates
+};
