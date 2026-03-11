@@ -95,10 +95,10 @@ export default function SMDashboard() {
         "PLA ID": row.plaId || "",
         "PLA Status": "",
         "Area": row.sArea || "",
-        "Region ": (geo.region || reg) || "",
-        "Province": (geo.province || row.prov) || "",
-        "City/Municipality": (geo.city || row.mCity) || "",
-        "Barangay": geo.place || "",
+        "Region ": (row.region || geo.region) || "",
+        "Province": (row.prov || geo.province) || "",
+        "City/Municipality": (row.mCity || geo.city) || "",
+        "Barangay": "",
         "Site Address": row.sAdd || "",
         "Longitude": row.lng || "",
         "Latitude": row.lat || "",
@@ -108,7 +108,7 @@ export default function SMDashboard() {
         "Techname/BTS": row.techName || "",
         "Tech Description": "",
         "Tech Status": "",
-        "Site Owner": row.siteOwner || geo.siteCode || "GLOBE TELECOM",
+        "Site Owner": row.twrC || geo.siteCode || "GLOBE TELECOM",
         "Territory": row.trt || "",
         "Hiroshima Severity": row.hSvr || "",
         "Remarks": row.remarks || "",
@@ -135,8 +135,6 @@ export default function SMDashboard() {
     const dateStr = new Date().toISOString().split('T')[0];
     const fileName = `StormMasterlist_${exportCategory === 'ALL' ? 'Complete' : exportCategory}_${dateStr}.xlsx`;
     
-    XLSX.writeFile(workbook, fileName);
-
     XLSX.writeFile(workbook, fileName);
   };
 
