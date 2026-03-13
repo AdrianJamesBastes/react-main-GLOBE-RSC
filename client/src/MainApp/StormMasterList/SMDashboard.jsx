@@ -1,5 +1,4 @@
-import { useState } from 'react';
-// LoadingScreen was unused and removed
+import { useState, useMemo } from 'react';
 import useDarkMode from '../../hooks/useDarkMode';
 import AnalyticsDashboard from '../../Dashboard/AnalyticsDashboard';
 import MapVisualizer from '../../Map/MapVisualizer';
@@ -19,10 +18,10 @@ import search from '../../assets/search.png';
 import fileDark from '../../assets/fileDark.png';
 import fileLight from '../../assets/fileLight.png';
 
-import * as XLSX from 'xlsx';
 import { useNavigate } from "react-router-dom";
 
-import { parseLocationData, getTechSplits, getShortRegionByProvince } from '../../utils/telecom';
+import { parseLocationData, getShortRegionByProvince } from '../../utils/telecom';
+import { cityToProvinceMap } from '../MapDictionary/TelecomDictionaries';
 import DashboardLayout from '../../components/DashboardLayout';
 import '../../styles/Dashboard_styles.css';
 import './SM_styles.css';
@@ -42,8 +41,6 @@ const ICONS = {
   fileDark,
   fileLight
 };
-
-// Helpers moved to utils/telecom.js and imported above
 
 export default function SMDashboard() {
   const [monitorFile1, setMonitorFile1] = useState(null);
@@ -78,34 +75,55 @@ export default function SMDashboard() {
     });
   };
 
-  const handleSpecificExport = (exportCategory) => {
+  const handleSpecificExport = async (exportCategory) => {
     setShowExportMenu(false);
     if (results.length === 0) return alert("No data to export.");
 
-    const dataToExport = exportCategory === 'ALL' ? results : results.filter(row => row.matchStatus === exportCategory);
+    const XLSX = await import('xlsx');
+
+    const dataToExport = exportCategory === 'ALL' 
+      ? results.filter(row => row.matchStatus !== 'REMOVED') 
+      : results.filter(row => row.matchStatus === exportCategory);
+
     if (dataToExport.length === 0) return alert(`There are no "${exportCategory}" sites to export.`);
+
+    const exportStatusOrder = ['NEW', 'MISMATCH', 'REMOVED', 'UNCHANGED'];
+    
+    dataToExport.sort((a, b) => {
+      const orderA = exportStatusOrder.indexOf(a.matchStatus);
+      const orderB = exportStatusOrder.indexOf(b.matchStatus);
+      if (orderA !== orderB) return orderA - orderB;
+
+      const baseA = a.baseLocation || "";
+      const baseB = b.baseLocation || "";
+      return baseA.localeCompare(baseB, undefined, { numeric: true, sensitivity: 'base' });
+    });
 
     const excelData = dataToExport.map(row => {
       const geo = parseLocationData(row.baseLocation);
-      const tech = getTechSplits(row.technologySuffix);
-      const reg = getShortRegionByProvince(row.prov);
+      
+      let reg = getShortRegionByProvince(row.prov);
+      if (!reg && geo.province) reg = getShortRegionByProvince(geo.province);
+      if (!reg && row.mCity) {
+        const cleanCity = String(row.mCity).toUpperCase().trim();
+        const fallbackProv = cityToProvinceMap[cleanCity];
+        if (fallbackProv) reg = getShortRegionByProvince(fallbackProv);
+      }
 
       return {
         "Region": "MIN",
-        "PLA ID": row.plaId || "",
+        "PLA ID": row.plaId === "NEW_SITE" ? "" : (row.plaId || ""),
         "PLA Status": "",
         "Area": row.sArea || "",
-        "Region ": (row.region || geo.region) || "",
+        "Region ": (row.region || geo.region || reg) || "",
         "Province": (row.prov || geo.province) || "",
-        "City/Municipality": (row.mCity || geo.city) || "",
+        "Municipality": (row.mCity || geo.city) || "",
         "Barangay": "",
         "Site Address": row.sAdd || "",
         "Longitude": row.lng || "",
         "Latitude": row.lat || "",
-        "2G": tech.g2 || "",
-        "4G": tech.g4 || "",
-        "5G": tech.g5 || "",
-        "Techname/BTS": row.techName || "",
+        "Technology": row.techGen || "UDM Only",            
+        "Tech Name/ BTS": row.nmsName || row.techName, 
         "Tech Description": "",
         "Tech Status": "",
         "Site Owner": row.twrC || geo.siteCode || "GLOBE TELECOM",
@@ -149,67 +167,96 @@ export default function SMDashboard() {
       const text1 = await readFileAsText(monitorFile1);
       const text2 = await readFileAsText(monitorFile2);
 
-      setTimeout(() => {
-        if (window.google && window.google.script) {
-           window.google.script.run
-             .withSuccessHandler((resRaw) => {
-               const res = JSON.parse(resRaw);
-               if (res.success) {
-                 setResults(res.data);
-                 if (res.count === 0) alert("No data parsed. Check CSV format.");
-               } else alert("Error: " + res.error);
-               setIsLoading(false);
-             })
-             .withFailureHandler((err) => {
-               alert("Connection Failed: " + err);
-               setIsLoading(false);
-             })
-             .processCSVComparison(text1, text2);
-        } else {
-           const mockData = [];
-           const statuses = ["UNCHANGED", "MISMATCH", "NEW", "REMOVED"];
-           for(let i=1; i<=50; i++) {
-             mockData.push({ 
-               plaId: `MIN_${String(i).padStart(4, '0')}`, 
-               matchStatus: statuses[i % 4], 
-               techName: `SITENAME${i}DDNLYK`, 
-               baseLocation: `SITENAME${i}DDN`,
-               technologySuffix: "LYK",
-               remarks: "Mock data generated.",
-               lat: (7.0 + (Math.random() * 0.5)).toFixed(5), 
-               lng: (125.4 + (Math.random() * 0.5)).toFixed(5),
-               original2G: `SITE${i}A | SITE${i}B`,
-               original4G: `SITE${i}C`,
-               original5G: ""
-             });
-           }
-           setResults(mockData);
-           setIsLoading(false);
-        }
-      }, 1000);
+      const sendInChunks = (file1, file2) => {
+        return new Promise((resolve, reject) => {
+          if (window.google && window.google.script) {
+             window.google.script.run
+               .withSuccessHandler((resRaw) => {
+                 const res = JSON.parse(resRaw);
+                 if (res.success) resolve(res.data);
+                 else reject(res.error);
+               })
+               .withFailureHandler(reject)
+               .processCSVComparison(file1, file2);
+          } else {
+             setTimeout(() => {
+               const mockData = [];
+               const statuses = ["NEW", "MISMATCH", "UNCHANGED", "REMOVED"];
+               for(let i=1; i<=50; i++) {
+                 mockData.push({ 
+                   plaId: `MIN_${String(i).padStart(4, '0')}`, 
+                   matchStatus: statuses[(i-1) % statuses.length], 
+                   techName: `SITENAME${i}DDN`, 
+                   baseLocation: `SITENAME${i}DDN`,
+                   techGen: "4G-FDD",
+                   nmsName: `SITENAME${i}DDNLYK`,
+                   remarks: "Mock data generated.",
+                   lat: (7.0 + (Math.random() * 0.5)).toFixed(5), 
+                   lng: (125.4 + (Math.random() * 0.5)).toFixed(5),
+                   sArea: "N/A", prov: "UNKNOWN", mCity: "UNKNOWN", sAdd: "N/A", trt: "N/A", hSvr: "N/A", twrC: "N/A"
+                 });
+               }
+               resolve(mockData);
+             }, 1000);
+          }
+        });
+      };
+
+      const data = await sendInChunks(text1, text2);
+      setResults(data);
+      setIsLoading(false);
     } catch (error) {
-      alert("Error: " + error.message);
+      alert("Error: " + error);
       setIsLoading(false);
     }
   };
 
-  const filteredResults = results.filter(row => {
+  const stats = useMemo(() => {
+    const siteMap = new Map();
+    results.forEach(r => {
+      // FIX: Use baseLocation as the true unique identifier for sites
+      const key = r.baseLocation; 
+      if (!siteMap.has(key)) siteMap.set(key, r.matchStatus);
+    });
+
+    const statusValues = Array.from(siteMap.values());
+
+    return {
+      total: siteMap.size,
+      unchanged: statusValues.filter(s => s === 'UNCHANGED').length,
+      new: statusValues.filter(s => s === 'NEW').length,
+      removed: statusValues.filter(s => s === 'REMOVED').length,
+      mismatch: statusValues.filter(s => s === 'MISMATCH').length,
+    };
+  }, [results]);
+
+  const filteredResults = useMemo(() => {
+    const statusOrder = ['NEW', 'MISMATCH', 'UNCHANGED', 'REMOVED'];
     const term = searchTerm.toLowerCase();
-    const matchesSearch = [row.plaId, row.techName, row.baseLocation, row.remarks]
-      .filter(Boolean).some(value => value.toString().toLowerCase().includes(term));
-    const matchesStatus = filterStatus === 'ALL' ? true : row.matchStatus === filterStatus;
-    return matchesSearch && matchesStatus;
-  }).sort((a, b) => {
-    const baseA = a.baseLocation || "";
-    const baseB = b.baseLocation || "";
-    const baseCompare = baseA.localeCompare(baseB, undefined, { numeric: true, sensitivity: 'base' });
-    if (baseCompare === 0) {
-      const plaA = a.plaId || "";
-      const plaB = b.plaId || "";
-      return plaA.localeCompare(plaB, undefined, { numeric: true, sensitivity: 'base' });
-    }
-    return baseCompare;
-  });
+
+    return results
+      .filter(row => {
+        const matchesSearch = [row.plaId, row.baseLocation, row.remarks, row.nmsName]
+          .filter(Boolean)
+          .some(value => value.toString().toLowerCase().includes(term));
+        const matchesStatus = filterStatus === 'ALL' ? true : row.matchStatus === filterStatus;
+        return matchesSearch && matchesStatus;
+      })
+      .sort((a, b) => {
+        const orderA = statusOrder.indexOf(a.matchStatus);
+        const orderB = statusOrder.indexOf(b.matchStatus);
+        if (orderA !== orderB) return orderA - orderB;
+
+        // Sort by baseLocation so physical sites stay grouped together
+        const baseA = a.baseLocation || "";
+        const baseB = b.baseLocation || "";
+        const baseCompare = baseA.localeCompare(baseB, undefined, { numeric: true, sensitivity: 'base' });
+        
+        // If same base location, sort by the specific tech name
+        if (baseCompare === 0) return (a.nmsName || "").localeCompare(b.nmsName || "");
+        return baseCompare;
+      });
+  }, [results, searchTerm, filterStatus]);
 
   const getPreviewLabel = (status) => {
     switch(status) {
@@ -226,7 +273,7 @@ export default function SMDashboard() {
     setIsLoading(true);
     setTimeout(() => {
       navigate(path);
-    }, 1000); // simulate loading
+    }, 1000); 
   };
 
   const headerActions = (
@@ -322,7 +369,9 @@ export default function SMDashboard() {
                   <div className="details-content">
                     <div>
                       <span className="input-label">PLA_ID</span>
-                      <div style={{ fontSize: '1.3rem', fontWeight: 'bold' }}>{selectedRowDetails.plaId}</div>
+                      <div style={{ fontSize: '1.3rem', fontWeight: 'bold' }}>
+                        {selectedRowDetails.plaId === "NEW_SITE" ? "N/A" : selectedRowDetails.plaId}
+                      </div>
                     </div>
                     <div>
                       <span className="input-label">Status</span>
@@ -335,7 +384,7 @@ export default function SMDashboard() {
                     <div className="details-box">
                       <span className="input-label">Tech Name (String)</span>
                       <div style={{ fontWeight: 'bold', marginTop: '4px', wordBreak: 'break-word' }}>
-                        {selectedRowDetails.techName}
+                        {selectedRowDetails.nmsName || selectedRowDetails.baseLocation}
                       </div>
                     </div>
                     <div className="details-box">
@@ -380,34 +429,34 @@ export default function SMDashboard() {
             <div className="dashboard-container">
               <AnalyticsDashboard data={results} activeFilter={filterStatus} onFilterChange={setFilterStatus} isDarkMode={isDarkMode} />
               <div className="cards-section">
-                <div className={`stat-card total ${filterStatus === 'ALL' ? 'active' : ''}`} onClick={() => setFilterStatus('ALL')} style={{cursor: 'pointer'}}>
+                <div className={`stat-card luxury-glass total ${filterStatus === 'ALL' ? 'active' : ''}`} onClick={() => setFilterStatus('ALL')} style={{cursor: 'pointer'}}>
                   <img src={isDarkMode ? ICONS.checkDark : ICONS.checkLight} className="stat-icon" alt="Total" />
                   <div className="stat-label">Total Validated</div>
-                  <div className="stat-value">{results.length}</div>
+                  <div className="stat-value">{stats.total}</div>
                 </div>
 
-                <div className={`stat-card unchanged ${filterStatus === 'UNCHANGED' ? 'active' : ''}`} onClick={() => setFilterStatus('UNCHANGED')} style={{cursor: 'pointer'}}>
+                <div className={`stat-card luxury-glass unchanged ${filterStatus === 'UNCHANGED' ? 'active' : ''}`} onClick={() => setFilterStatus('UNCHANGED')} style={{cursor: 'pointer'}}>
                   <img src={isDarkMode ? ICONS.verifiedDark : ICONS.verifiedLight} className="stat-icon" alt="Verified" />
                   <div className="stat-label">Verified</div>
-                  <div className="stat-value">{results.filter(r => r.matchStatus === 'UNCHANGED').length}</div>
+                  <div className="stat-value">{stats.unchanged}</div>
                 </div>
 
-                <div className={`stat-card new ${filterStatus === 'NEW' ? 'active' : ''}`} onClick={() => setFilterStatus('NEW')} style={{cursor: 'pointer'}}>
+                <div className={`stat-card luxury-glass new ${filterStatus === 'NEW' ? 'active' : ''}`} onClick={() => setFilterStatus('NEW')} style={{cursor: 'pointer'}}>
                   <img src={isDarkMode ? ICONS.glitterDark : ICONS.glitterLight} className="stat-icon" alt="New" />
                   <div className="stat-label">New In NMS</div>
-                  <div className="stat-value">{results.filter(r => r.matchStatus === 'NEW').length}</div>
+                  <div className="stat-value">{stats.new}</div>
                 </div>
 
-                <div className={`stat-card removed ${filterStatus === 'REMOVED' ? 'active' : ''}`} onClick={() => setFilterStatus('REMOVED')} style={{cursor: 'pointer'}}>
+                <div className={`stat-card luxury-glass removed ${filterStatus === 'REMOVED' ? 'active' : ''}`} onClick={() => setFilterStatus('REMOVED')} style={{cursor: 'pointer'}}>
                   <img src={isDarkMode ? ICONS.removedDark : ICONS.removedLight} className="stat-icon" alt="Removed" />
                   <div className="stat-label">Missing (Removed)</div>
-                  <div className="stat-value">{results.filter(r => r.matchStatus === 'REMOVED').length}</div>
+                  <div className="stat-value">{stats.removed}</div>
                 </div>
 
-                <div className={`stat-card mismatch ${filterStatus === 'MISMATCH' ? 'active' : ''}`} onClick={() => setFilterStatus('MISMATCH')} style={{cursor: 'pointer'}}>
+                <div className={`stat-card luxury-glass mismatch ${filterStatus === 'MISMATCH' ? 'active' : ''}`} onClick={() => setFilterStatus('MISMATCH')} style={{cursor: 'pointer'}}>
                   <img src={isDarkMode ? ICONS.warningDark : ICONS.warningLight} className="stat-icon" alt="Warning" />
                   <div className="stat-label">Discrepancy</div>
-                  <div className="stat-value">{results.filter(r => r.matchStatus === 'MISMATCH').length}</div>
+                  <div className="stat-value">{stats.mismatch}</div>
                 </div>
               </div>
             </div>
@@ -450,7 +499,7 @@ export default function SMDashboard() {
                   cursor: results.length === 0 ? 'not-allowed' : 'text' 
                 }}
               />
-            </div>  {/* end toolbar */}
+            </div>
 
             <div className="output-box">
               {results.length > 0 ? (
@@ -462,86 +511,58 @@ export default function SMDashboard() {
                         <th>Status</th>
                         <th>Base Name</th>
                         <th style={{color: '#1a73e8'}}>Technology</th>
-                        <th style={{color: '#1a73e8'}}>NMS Techname</th>
+                        <th style={{color: '#1a73e8'}}>BCF NAME</th>
                         <th>Remarks</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredResults.flatMap((row, i) => {
-                        const buildSubRows = (origStringGroup, baseGen) => {
-                          if (!origStringGroup) return [];
-                          return origStringGroup.split(" | ").map(nmsName => {
-                            const suffixMatch = nmsName.match(/(?:ID|AS|[XYLFWKHVZJBMNPRT])+$/i);
-                            const suffix = suffixMatch ? suffixMatch[0].toUpperCase() : "";
-                            let label = baseGen;
-                            
-                            if (baseGen === "4G") {
-                              let types = [];
-                              if (/[FLWY]/i.test(suffix)) types.push("FDD");
-                              if (/H/i.test(suffix)) types.push("TDD");
-                              if (/V/i.test(suffix)) types.push("MM");
-                              if (types.length > 0) label = `4G-${types.join("/")}`;
-                            } else if (baseGen === "5G") {
-                              let types = [];
-                              if (/M/i.test(suffix)) types.push("MM");
-                              if (/[PN]/i.test(suffix)) types.push("NMM");
-                              if (types.length > 0) label = `5G-${types.join("/")}`;
-                            }
-                            return { techGen: label, nmsName: nmsName };
-                          });
-                        };
-
-                        const subRows = [
-                          ...buildSubRows(row.original2G, "2G"),
-                          ...buildSubRows(row.original4G, "4G"),
-                          ...buildSubRows(row.original5G, "5G")
-                        ];
+                      {filteredResults.map((row, i) => {
+                        // FIX: Group visually using baseLocation instead of plaId
+                        const isExactRow = selectedSite?.nmsName === row.nmsName;
+                        const isSameGroup = selectedSite?.baseLocation === row.baseLocation && !isExactRow;
                         
-                        if (subRows.length === 0) {
-                          subRows.push({ techGen: "UDM Only", nmsName: row.techName });
-                        }
+                        let rowStyle = { cursor: "pointer", transition: "background-color 0.2s" };
+                        if (isExactRow) rowStyle.backgroundColor = "rgba(0, 123, 255, 0.2)";
+                        else if (isSameGroup) rowStyle.backgroundColor = "rgba(128, 128, 128, 0.15)";
 
-                        return subRows.map((sub, j) => {
-                          const isExactRow = selectedSite?.index === i;
-                          const isSameGroup = selectedSite?.id === row.plaId && !isExactRow;
-                          let rowStyle = { cursor: "pointer", transition: "background-color 0.2s" };
-                          
-                          if (isExactRow) rowStyle.backgroundColor = "rgba(0, 123, 255, 0.2)";
-                          else if (isSameGroup) rowStyle.backgroundColor = "rgba(128, 128, 128, 0.15)";
+                        const nextRow = filteredResults[i + 1];
+                        const isLastOfGroup = !nextRow || nextRow.baseLocation !== row.baseLocation;
+                        if (isLastOfGroup) rowStyle.borderBottom = "2px solid var(--border-color)";
 
-                          const isLastOfGroup = j === subRows.length - 1;
-                          if (isLastOfGroup) rowStyle.borderBottom = "2px solid var(--border-color)";
+                        const prevRow = filteredResults[i - 1];
+                        const isFirstOfGroup = !prevRow || prevRow.baseLocation !== row.baseLocation;
 
-                          return (
-                            <tr key={`${i}-${j}`} className="row-hover" style={rowStyle}
-                              onClick={() => {
-                                const lat = parseFloat(row.lat);
-                                const lng = parseFloat(row.lng);
-                                setSelectedSite({ lat, lng, id: row.plaId, zoom: 18, index: i });
-                                setSelectedRowDetails(row);
-                              }}
-                            >
-                              <td className="font-bold">{j === 0 ? row.plaId : ""}</td>
-                              <td>
-                                {j === 0 && (
-                                  <span className={`status-badge ${row.matchStatus.toLowerCase()}`}>
-                                    {row.matchStatus}
-                                  </span>
-                                )}
-                              </td>
-                              <td style={{ fontWeight: '500' }}>{j === 0 ? row.baseLocation : ""}</td>
-                              <td style={{ fontWeight: 'bold', color: sub.techGen.includes('5G') ? '#28a745' : (sub.techGen.includes('4G') ? '#007bff' : '#666') }}>
-                                {sub.techGen}
-                              </td>
-                              <td style={{ fontFamily: 'monospace', color: '#1a73e8', fontWeight: 'bold' }}>
-                                {sub.nmsName}
-                              </td>
-                              <td style={{ fontSize: '0.75rem', color: 'var(--text-secondary)'}}>
-                                {j === 0 ? row.remarks : ""}
-                              </td>
-                            </tr>
-                          );
-                        });
+                        return (
+                          <tr key={`${row.baseLocation}-${row.nmsName}-${i}`} className="row-hover" style={rowStyle}
+                            onClick={() => {
+                              const lat = parseFloat(row.lat);
+                              const lng = parseFloat(row.lng);
+                              setSelectedSite({ lat, lng, id: row.plaId, baseLocation: row.baseLocation, nmsName: row.nmsName, zoom: 18 });
+                              setSelectedRowDetails(row);
+                            }}
+                          >
+                            <td className="font-bold">
+                              {isFirstOfGroup ? (row.plaId === "NEW_SITE" ? "N/A" : row.plaId) : ""}
+                            </td>
+                            <td>
+                              {isFirstOfGroup && (
+                                <span className={`status-badge ${row.matchStatus.toLowerCase()}`}>
+                                  {row.matchStatus}
+                                </span>
+                              )}
+                            </td>
+                            <td style={{ fontWeight: '500' }}>{isFirstOfGroup ? row.baseLocation : ""}</td>
+                            <td style={{ fontWeight: 'bold', color: row.techGen?.includes('5G') ? '#28a745' : (row.techGen?.includes('4G') ? '#007bff' : '#666') }}>
+                              {row.techGen}
+                            </td>
+                            <td style={{ fontFamily: 'monospace', color: '#1a73e8', fontWeight: 'bold' }}>
+                              {row.nmsName}
+                            </td>
+                            <td style={{ fontSize: '0.75rem', color: 'var(--text-secondary)'}}>
+                              {isFirstOfGroup ? row.remarks : ""}
+                            </td>
+                          </tr>
+                        );
                       })}
                     </tbody>
                   </table>
@@ -563,7 +584,7 @@ export default function SMDashboard() {
         <div className="map-modal-overlay">
           <div className="map-modal-content">
             <div className="map-modal-header">
-              <h3>Site Location: {selectedSite.id || "Region Map"}</h3>
+              <h3>Site Location: {selectedSite.baseLocation || "Region Map"}</h3>
               <button className="close-btn" onClick={() => setShowBigMap(false)}> Close</button>
             </div>
             <div className="big-map-wrapper">

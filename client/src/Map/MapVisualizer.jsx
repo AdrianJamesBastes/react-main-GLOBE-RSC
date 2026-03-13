@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { MapContainer, TileLayer, WMSTileLayer, Marker, Popup, Tooltip, useMap } from 'react-leaflet';
 import MarkerClusterGroup from 'react-leaflet-cluster';
 import 'leaflet/dist/leaflet.css';
@@ -50,63 +50,69 @@ const createCustomClusterIcon = (cluster) => {
 
 function MapRecenter({ lat, lng, zoom, expanded, filteredResults = [], selectedSite = {} }) {
   const map = useMap();
-  useEffect(() => {
-    // always recalc size whenever something changes
-    map.invalidateSize();
-
-    // build bounds from all available coordinates
+  
+  // Memoize bounds to prevent fitBounds flooding
+  const bounds = useMemo(() => {
     const pts = [];
     filteredResults.forEach(site => {
       if (site.lat && site.lng) pts.push([parseFloat(site.lat), parseFloat(site.lng)]);
     });
-    if (selectedSite.lat && selectedSite.lng) {
-      pts.push([parseFloat(selectedSite.lat), parseFloat(selectedSite.lng)]);
-    }
+    return pts.length ? L.latLngBounds(pts) : null;
+  }, [filteredResults]);
 
-    if (pts.length) {
-      const bounds = L.latLngBounds(pts);
+  useEffect(() => {
+    map.invalidateSize();
+    if (selectedSite.lat && selectedSite.lng) {
+      map.flyTo([parseFloat(selectedSite.lat), parseFloat(selectedSite.lng)], 18, { animate: true, duration: 1 });
+    } else if (bounds) {
       map.fitBounds(bounds, { padding: [60, 60] });
-    } else if (lat && lng) {
-      // fallback to single point
-      map.flyTo([lat, lng], zoom, { animate: true, duration: 1.5 });
     }
-  }, [lat, lng, zoom, expanded, filteredResults, selectedSite, map]);
+  }, [selectedSite.lat, selectedSite.lng, bounds, expanded, map]);
+
   return null;
 }
 
 export default function MapVisualizer({ selectedSite = {}, filteredResults = [], isExpanded = false }) {
-  // calculate zoom level based on selection / expansion
+  
+  // OPTIMIZATION: Pre-calculate counts and valid coordinates once per data change O(N)
+  const processedData = useMemo(() => {
+    const idMap = {};
+    filteredResults.forEach(s => {
+      if (s.plaId) idMap[s.plaId] = (idMap[s.plaId] || 0) + 1;
+    });
+
+    return filteredResults
+      .filter(s => s.lat && s.lng)
+      .map((s, idx) => ({
+        ...s,
+        originalIndex: idx,
+        latNum: parseFloat(s.lat),
+        lngNum: parseFloat(s.lng),
+        dupCount: idMap[s.plaId] || 1
+      }));
+  }, [filteredResults]);
+
+  const [centreLat, centreLng] = useMemo(() => {
+    if (selectedSite.lat && selectedSite.lng) return [parseFloat(selectedSite.lat), parseFloat(selectedSite.lng)];
+    if (processedData.length > 0) {
+      const sum = processedData.reduce((acc, curr) => [acc[0] + curr.latNum, acc[1] + curr.lngNum], [0, 0]);
+      return [sum[0] / processedData.length, sum[1] / processedData.length];
+    }
+    return [7.1907, 125.4553];
+  }, [selectedSite.lat, selectedSite.lng, processedData]);
+
   const currentZoom = selectedSite.lat ? 18 : (isExpanded ? 15 : 10);
 
-  // determine map centre: prioritise the selected site, otherwise average all available pins,
-  // and finally fall back to the hard‑coded region coordinates.
-  const [centreLat, centreLng] = (() => {
-    if (selectedSite.lat && selectedSite.lng) {
-      return [parseFloat(selectedSite.lat), parseFloat(selectedSite.lng)];
-    }
-    let sumLat = 0, sumLng = 0, count = 0;
-    filteredResults.forEach(site => {
-      if (site.lat && site.lng) {
-        sumLat += parseFloat(site.lat);
-        sumLng += parseFloat(site.lng);
-        count++;
-      }
-    });
-    if (count > 0) {
-      return [sumLat / count, sumLng / count];
-    }
-    // fallback default
-    return [7.1907, 125.4553];
-  })();
-
   return (
-    <MapContainer center={[centreLat, centreLng]} zoom={currentZoom} zoomControl={isExpanded} style={{ height: "100%", width: "100%", zIndex: 1 }}>
+    <MapContainer center={[centreLat, centreLng]} zoom={currentZoom} zoomControl={isExpanded} style={{ height: "100%", width: "100%", zIndex: 1 }} preferCanvas={true}>
       <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
       <MapRecenter
          lat={centreLat}
          lng={centreLng}
          zoom={currentZoom}
          expanded={isExpanded}
+         filteredResults={filteredResults}
+         selectedSite={selectedSite}
       />
       
       <WMSTileLayer
@@ -118,25 +124,15 @@ export default function MapVisualizer({ selectedSite = {}, filteredResults = [],
         zIndex={10}
       />
 
-      {(() => {
-        const clusteredPins = [];
-        let highlightedPin = null;
+      <MarkerClusterGroup chunkedLoading maxClusterRadius={60} iconCreateFunction={createCustomClusterIcon} disableClusteringAtZoom={16}>
+        {processedData.map((site) => {
+          const isSelected = selectedSite.index === site.originalIndex;
+          if (isSelected) return null; // Render outside cluster group
 
-        filteredResults.forEach((site, idx) => {
-          if (!site.lat || !site.lng) return; // Skip mapping if lat/lng is null (e.g. NEW sites not in UDM)
-          
-          const isSelected = selectedSite.index === idx;
-          const duplicateCount = filteredResults.filter(s => s.plaId === site.plaId).length;
-
-          const pinLat = isSelected ? parseFloat(site.lat) + 0.0001 : parseFloat(site.lat);
-          const pinLng = isSelected ? parseFloat(site.lng) + 0.0001 : parseFloat(site.lng);
-
-          const markerElement = (
-            <Marker key={`pin-${idx}`} position={[pinLat, pinLng]} icon={getCustomIcon(site.matchStatus, isSelected, duplicateCount)} zIndexOffset={isSelected ? 1000 : 0}>
-              <Tooltip permanent={true} direction="right" offset={[isSelected ? 14 : 10, 0]} opacity={0.9}>
-                <span style={{ fontSize: isSelected ? '0.9rem' : '0.75rem', fontWeight: 'bold', color: isSelected ? '#001f5f' : '#222' }}>
-                  {site.plaId}
-                </span>
+          return (
+            <Marker key={`pin-${site.plaId}-${site.originalIndex}`} position={[site.latNum, site.lngNum]} icon={getCustomIcon(site.matchStatus, false, site.dupCount)}>
+              <Tooltip direction="right" offset={[10, 0]} opacity={0.9}>
+                <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#222' }}>{site.plaId}</span>
               </Tooltip>
               <Popup>
                 <strong>{site.plaId}</strong><br/>
@@ -144,20 +140,20 @@ export default function MapVisualizer({ selectedSite = {}, filteredResults = [],
               </Popup>
             </Marker>
           );
+        })}
+      </MarkerClusterGroup>
 
-          if (isSelected) highlightedPin = markerElement;
-          else clusteredPins.push(markerElement);
-        });
-
-        return (
-          <>
-            <MarkerClusterGroup chunkedLoading maxClusterRadius={60} iconCreateFunction={createCustomClusterIcon} disableClusteringAtZoom={16}>
-              {clusteredPins}
-            </MarkerClusterGroup>
-            {highlightedPin}
-          </>
-        );
-      })()}
+      {selectedSite.lat && (
+        <Marker 
+          position={[parseFloat(selectedSite.lat) + 0.0001, parseFloat(selectedSite.lng) + 0.0001]} 
+          icon={getCustomIcon(selectedSite.matchStatus || 'UNCHANGED', true, 1)}
+          zIndexOffset={1000}
+        >
+          <Tooltip permanent direction="right" offset={[14, 0]} opacity={0.9}>
+            <span style={{ fontSize: '0.9rem', fontWeight: 'bold', color: '#001f5f' }}>{selectedSite.id}</span>
+          </Tooltip>
+        </Marker>
+      )}
     </MapContainer>
   );
 }

@@ -567,6 +567,53 @@ body.dark-mode .stat-card {
 .stat-card.mismatch { border-bottom-color: #ff8b07; }
 .stat-card.total { border-bottom-color: var(--brand-purple); }
 
+/* Premium Glass Morphism - Senior Developer Edition */
+.luxury-glass {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.03) 100%);
+  backdrop-filter: blur(32px) saturate(180%);
+  -webkit-backdrop-filter: blur(32px) saturate(180%);
+  border: 1.5px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 
+    inset 0 1px 1px rgba(255, 255, 255, 0.2),
+    0 20px 40px rgba(0, 0, 0, 0.08);
+  transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+  transform: translateZ(0); /* Hardware acceleration */
+}
+
+.luxury-glass:hover {
+  transform: translateY(-8px) scale(1.02);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.18) 0%, rgba(255, 255, 255, 0.05) 100%);
+  box-shadow: 
+    inset 0 1px 1px rgba(255, 255, 255, 0.3),
+    0 30px 60px rgba(0, 0, 0, 0.12);
+}
+
+.stat-card.active {
+  transform: translateY(-10px) scale(1.02);
+  background: linear-gradient(
+    135deg, 
+    rgba(255, 255, 255, 0.25) 0%, 
+    rgba(255, 255, 255, 0.05) 100%
+  );
+  box-shadow: 
+    inset 0 1px 1px rgba(255, 255, 255, 0.6),
+    0 15px 35px rgba(0, 0, 0, 0.15);
+}
+
+body.dark-mode .stat-card.active {
+  background: linear-gradient(
+    135deg, 
+    rgba(255, 255, 255, 0.15) 0%, 
+    rgba(255, 255, 255, 0.05) 100%
+  );
+}
+
+.stat-card.new.active { border-bottom: 4px solid #0db15c; box-shadow: 0 12px 20px -10px rgba(13, 177, 92, 0.6), 0 20px 40px rgba(0, 0, 0, 0.1); }
+.stat-card.unchanged.active { border-bottom: 4px solid #46aa27; box-shadow: 0 12px 20px -10px rgba(70, 170, 39, 0.6), 0 20px 40px rgba(0, 0, 0, 0.1); }
+.stat-card.removed.active { border-bottom: 4px solid #f02849; box-shadow: 0 12px 20px -10px rgba(240, 40, 73, 0.6), 0 20px 40px rgba(0, 0, 0, 0.1); }
+.stat-card.mismatch.active { border-bottom: 4px solid #ff8b07; box-shadow: 0 12px 20px -10px rgba(255, 139, 7, 0.6), 0 20px 40px rgba(0, 0, 0, 0.1); }
+.stat-card.total.active { border-bottom: 4px solid var(--brand-purple); box-shadow: 0 12px 20px -10px rgba(112, 51, 255, 0.6), 0 20px 40px rgba(0, 0, 0, 0.1); }
+
 /* Modals */
 .map-modal-overlay { 
   position: absolute; /* Changed from fixed to absolute to respect the glass container */

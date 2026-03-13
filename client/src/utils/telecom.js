@@ -83,10 +83,17 @@ export function getTechSplits(suffix) {
   return res;
 }
 
-export function getShortRegionByProvince(provName) {
-  if (!provName) return "";
-  for (const [regionShort, provList] of Object.entries(regionsToProvincesMap)) {
-    if (provList.includes(provName)) return regionShort;
+export const getShortRegionByProvince = (province) => {
+  if (!province) return "";
+
+  const cleanProvince = String(province).toUpperCase().trim();
+
+  for (const [region, provincesList] of Object.entries(regionsToProvincesMap)) {
+    // compare against normalized province values
+    if (provincesList.includes(cleanProvince)) {
+      return region;
+    }
   }
+
   return "";
-}
+};
