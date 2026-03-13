@@ -1,175 +1,339 @@
 /**
- * backend-gas/code.gs
- * Authority: Original Logic + Industry Grade Fixes
+ * Project: Globe RSC Network Delta Engine
+ * Version: Flat Unpivoted Output + BCF Macro Logic + Geo-Inference
  */
-// 1. THE "FRONT DOOR"
+
+// --- 1. THE "FRONT DOOR" ---
 function doGet(e) {
-  return HtmlService.createHtmlOutputFromFile('index').setTitle('Globe RSC').setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL).addMetaTag('viewport', 'width=device-width, initial-scale=1');
+  return HtmlService.createHtmlOutputFromFile('index')
+    .setTitle('Globe RSC')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
-// 2. THE ANCHOR PARSING ENGINE (Helper Function)
+
+// --- 2. GLOBAL HELPER FUNCTIONS ---
+
 function extractBaseAndSuffix(nmsString) {
   if (!nmsString) return { cleanBase: "", displayBase: "", suffix: "", suffixSet: new Set() };
+  
   let originalStr = String(nmsString).toUpperCase().trim();
   let displayBase = originalStr;
   let suffixLetters = "";
-  const anchors = ["DDS", "AGUSAN", "AGUADA", "AFGA", "CDO", "DVO", "DDN", "DDO", "DVOR", "DVOC", "KUD", "MOR", "MISOCC", "CVLY", "NCOT", "SCOT", "MGDN", "LDN", "LDS", "BUK", "ZDS", "ZDN", "MISOR", "MOCC", "SDN", "SDS", "AGS", "AGN", "SAR", "COT", "MKLALA", "PANABO", "TAGUM", "DIGOS", "GENSAN", "ZAMBOA", "POLOMO", "MRAMAG", "KIDAP", "COTAB", "MATI", "GINGOO", "DIPOL", "OZAMIS", "OZM", "ILIGAN", "MARAWI", "BUTUAN", "CARMEN", "STOMAS", "KPALON", "SAMAL", "PANTUK", "MACO", "MALITA", "BANSAL", "PADADA", "SULOP", "SMARIA", "GLAN", "ALABEL", "MALAPAT", "SFRANC", "MIDSAY", "SFERN", "PGDIAN", "MFORT", "TACUROS", "BISLIG", "CLAVER", "BAYABS", "DAVAO"];
+
+  const anchors = [
+    "DDS", "AGUSAN", "AGUADA", "AFGA", "CDO", "DVO", "DDN", "DDO", "DVOR", "DVOC", "KUD", "MOR", "MISOCC",
+    "CVLY", "NCOT", "SCOT", "MGDN", "LDN", "LDS", "BUK", "ZDS", "ZDN", "MISOR", "MOCC", "SDN", "SDS", "AGS", "AGN", "SAR", "COT",
+    "MKLALA", "PANABO", "TAGUM", "DIGOS", "GENSAN", "ZAMBOA", "POLOMO", "MRAMAG", "KIDAP", "COTAB", "MATI", "GINGOO", "DIPOL", "OZAMIS", "OZM", "ILIGAN", "MARAWI", "BUTUAN", "CARMEN", "STOMAS", "KPALON", "SAMAL", "PANTUK", "MACO", "MALITA", "BANSAL", "PADADA", "SULOP", "SMARIA", "GLAN", "ALABEL", "MALAPAT", "SFRANC", "MIDSAY", "SFERN", "PGDIAN", "MFORT", "TACUROS", "BISLIG", "CLAVER", "BAYABS", "DAVAO",
+    // VIP Protected Bases
+    "TRNSCOZ", "TRNSCO", "BASCOW", "BAS"
+  ];
+
   let matched = false;
+
   for (const anchor of anchors) {
     let idx = originalStr.lastIndexOf(anchor);
     if (idx !== -1) {
       let potentialSuffix = originalStr.slice(idx + anchor.length);
       let suffixTest = potentialSuffix.match(/^([-_ ]*)((?:ID|AS|[XYLFWKHVZJBMNPRTD])*)$/i);
+
       if (suffixTest && suffixTest[0] === potentialSuffix) {
-        displayBase = originalStr.slice(0, idx + anchor.length) + suffixTest[1];
-        suffixLetters = suffixTest[2];
+        let separator = suffixTest[1]; 
+        let actualSuffix = suffixTest[2]; 
+        displayBase = originalStr.slice(0, idx + anchor.length) + separator; 
+        suffixLetters = actualSuffix;
         matched = true;
         break;
       }
     }
   }
+
   if (!matched) {
     let fallbackMatch = originalStr.match(/([-_ ]*)((?:ID|AS|[XYLFWKHVZJBMNPRTD])+)$/i);
     if (fallbackMatch) {
-      displayBase = originalStr.slice(0, -fallbackMatch[0].length) + fallbackMatch[1];
-      suffixLetters = fallbackMatch[2];
+      let separator = fallbackMatch[1];
+      let actualSuffix = fallbackMatch[2];
+      displayBase = originalStr.slice(0, -fallbackMatch[0].length) + separator;
+      suffixLetters = actualSuffix;
     }
   }
+
   let cleanBase = displayBase.replace(/[^A-Z0-9]/g, "");
-  let suffixSet = new Set(suffixLetters.split(''));
-  return { cleanBase: cleanBase, displayBase: displayBase, suffix: suffixLetters, suffixSet: suffixSet };
+  
+  return { 
+    cleanBase: cleanBase, 
+    displayBase: displayBase, 
+    suffix: suffixLetters,
+    suffixSet: new Set(suffixLetters.split('')) 
+  };
 }
-// 3. THE ETL LOGIC (The Main Processor)
+
+function getIndex(headers, possibleNames) {
+  for (var i = 0; i < headers.length; i++) {
+    var h = String(headers[i]).trim().toUpperCase();
+    if (possibleNames.indexOf(h) > -1) return i;
+  }
+  return -1;
+}
+
+function getCoords(row, latIdx, lngIdx) {
+  return {
+    lat: latIdx > -1 && row[latIdx] ? row[latIdx] : 7.1905,
+    lng: lngIdx > -1 && row[lngIdx] ? row[lngIdx] : 125.4503
+  };
+}
+
+function inferLocation(baseName) {
+  var name = String(baseName).toUpperCase();
+  var result = { city: "", prov: "", area: "" };
+
+  var geoMap = [
+    { keys: ["PANABO", "TADECO"], city: "PANABO CITY", prov: "DAVAO DEL NORTE" },
+    { keys: ["SAMAL", "IGACOS"], city: "ISLAND GARDEN CITY OF SAMAL", prov: "DAVAO DEL NORTE" },
+    { keys: ["TAGUM"], city: "TAGUM CITY", prov: "DAVAO DEL NORTE" },
+    { keys: ["CARMEN"], city: "CARMEN", prov: "DAVAO DEL NORTE" },
+    { keys: ["DAVAO", "DVO", "ULAS"], city: "DAVAO CITY", prov: "DAVAO DEL SUR" },
+    { keys: ["DIGOS", "DDS"], city: "DIGOS CITY", prov: "DAVAO DEL SUR" },
+    { keys: ["MATI", "DVOR"], city: "MATI CITY", prov: "DAVAO ORIENTAL" },
+    { keys: ["KIDAPAWAN", "KIDAP"], city: "KIDAPAWAN CITY", prov: "NORTH COTABATO" },
+    { keys: ["COTABATO", "COTAB"], city: "COTABATO CITY", prov: "MAGUINDANAO DEL NORTE" },
+    { keys: ["ZAMBOANGA", "ZAMBOA"], city: "ZAMBOANGA CITY", prov: "ZAMBOANGA DEL SUR" },
+    { keys: ["GENSAN", "GSC"], city: "GENERAL SANTOS CITY", prov: "SOUTH COTABATO" },
+    { keys: ["CDO", "CAGAYAN"], city: "CAGAYAN DE ORO CITY", prov: "MISAMIS ORIENTAL" }
+  ];
+
+  for (var i = 0; i < geoMap.length; i++) {
+    for (var j = 0; j < geoMap[i].keys.length; j++) {
+      if (name.includes(geoMap[i].keys[j])) {
+        result.city = geoMap[i].city;
+        result.prov = geoMap[i].prov;
+        return result;
+      }
+    }
+  }
+  return result;
+}
+
+function generateSpecificTechLabel(baseGen, suffixStr) {
+  var str = String(suffixStr).toUpperCase();
+  var label = baseGen;
+  
+  if (baseGen === "4G") {
+    var types = [];
+    if (/[FLWY]/.test(str)) types.push("");
+    if (/H/.test(str)) types.push("");
+    if (/V/.test(str)) types.push("");
+    if (types.length > 0) label = "4G" + types.join("");
+  } else if (baseGen === "5G") {
+    var types = [];
+    if (/M/.test(str)) types.push("");
+    if (/[PN]/.test(str)) types.push("");
+    if (types.length > 0) label = "5G" + types.join("");
+  }
+  return label;
+}
+
+// --- 3. THE ETL LOGIC (Main Processor) ---
 function processCSVComparison(nmsText, udmText) {
   try {
     var nmsData = Utilities.parseCsv(nmsText);
     var udmData = Utilities.parseCsv(udmText);
-    if (nmsData.length < 2 || udmData.length < 2) throw new Error("File(s) empty.");
-    var nmsHeaders = nmsData[0].map(h => cleanText(h));
-    var udmHeaders = udmData[0].map(h => cleanText(h));
-    function getIndex(headers, possibleNames) {
-      for (var i = 0; i < headers.length; i++) {
-        if (possibleNames.indexOf(headers[i]) > -1) return i;
-      }
-      return -1;
+    
+    if (nmsData.length < 2 || udmData.length < 2) {
+      throw new Error("File(s) empty.");
     }
-    var uIdx = {
-      name: getIndex(udmHeaders, ['BCF NAME', 'TECH NAME', 'BTS NAME', 'SITENAME']),
-      id: getIndex(udmHeaders, ['PLA_ID', 'PLA ID']),
-      lat: getIndex(udmHeaders, ['LATITUDE', 'LAT']),
-      lng: getIndex(udmHeaders, ['LONGITUDE', 'LONG']),
-      area: getIndex(udmHeaders, ['ASSIGNED_AREA', 'ASSIGN AREA', 'ASSIGNED AREA']),
-      prov: getIndex(udmHeaders, ['PROVINCE']),
-      city: getIndex(udmHeaders, ['ASSIGN_CITY/MUNICIPALITY']),
-      add: getIndex(udmHeaders, ['SITE_ADDRESS', 'SITE ADD']),
-      trt: getIndex(udmHeaders, ['TERRITORY']),
-      hsvr: getIndex(udmHeaders, ['HIROSHIMA SEVERITY']),
-      twr: getIndex(udmHeaders, ['TOWERCO'])
-    };
-    var nIdx = {
-      g2: getIndex(nmsHeaders, ['2G', 'NAME']),
-      g4: getIndex(nmsHeaders, ['4G', 'ENBNAME']),
-      g5: getIndex(nmsHeaders, ['5G', 'GNBCUNAME'])
-    };
-    var udmRegistry = {};
+    
+    var nmsHeaders = nmsData[0];
+    var udmHeaders = udmData[0];
+
+    var udmNameIdx = getIndex(udmHeaders, ['BCF NAME']);
+    var udmIdIdx = getIndex(udmHeaders, ['PLA_ID', 'PLA ID']);
+    var udmLatIdx = getIndex(udmHeaders, ['LATITUDE', 'LAT']);
+    var udmLngIdx = getIndex(udmHeaders, ['LONGITUDE', 'LONG']);
+    var udmSAreaIdx = getIndex(udmHeaders, ['ASSIGNED_AREA', 'ASSIGN_AREA', 'ASSIGN AREA', 'ASSIGNED AREA']);
+    var udmProIdx = getIndex(udmHeaders, ['PROVINCE']);
+    var udmMCtyIdx = getIndex(udmHeaders, ['ASSIGN_CITY/MUNICIPALITY']);
+    var udmSAddIdx = getIndex(udmHeaders, ['SITE_ADDRESS', 'SITE_ADD', 'SITE ADDRESS', 'SITE ADD' ]);
+    var udmTrtIdx = getIndex(udmHeaders, ['TERRITORY']);
+    var udmHSvrIdx = getIndex(udmHeaders, ['HIROSHIMA SEVERITY', 'HIROSHIMA_SEVERITY']);
+    var udmtwrCIdx = getIndex(udmHeaders, ['TOWERCO']);
+    
+    var nms2GNameIdx = getIndex(nmsHeaders, ['2G', 'NAME']);
+    var nms4GNameIdx = getIndex(nmsHeaders, ['4G', 'ENBNAME']);
+    var nms5GNameIdx = getIndex(nmsHeaders, ['5G', 'GNBCUNAME']);
+
+// --- A. Build the UDM Hash Map ---
+    var udmTable = {};
     for (var j = 1; j < udmData.length; j++){
-      var row = udmData[j];
-      var rawName = row[uIdx.name];
-      if (!rawName) continue;
-      var parsedUdm = extractBaseAndSuffix(rawName);
-      var province = uIdx.prov > -1 ? row[uIdx.prov] : "";
-      udmRegistry[parsedUdm.cleanBase] = {
-        plaId: uIdx.id > -1 ? row[uIdx.id] : "UNKNOWN",
-        lat: Number(row[uIdx.lat]) || null,
-        lng: Number(row[uIdx.lng]) || null,
-        originalName: String(rawName).trim().toUpperCase(),
-        allowedSuffixSet: parsedUdm.suffixSet,
-        region: dict(province),
-        sArea: uIdx.area > -1 ? row[uIdx.area] : "",
-        prov: String(province).trim().toUpperCase(),
-        mCity: uIdx.city > -1 ? row[uIdx.city] : "",
-        sAdd: uIdx.add > -1 ? row[uIdx.add] : "",
-        trt: uIdx.trt > -1 ? row[uIdx.trt] : "",
-        hSvr: uIdx.hsvr > -1 ? row[uIdx.hsvr] : "",
-        twrC: uIdx.twr > -1 ? row[uIdx.twr] : ""
+      if (udmNameIdx === -1) continue;
+      
+      // THE FIX: The Phantom Row Destroyer
+      // If the entire CSV row is completely empty (caused by trailing newlines), skip it!
+      if (udmData[j].join("").replace(/,/g, "").trim() === "") continue;
+      
+      var rawName = String(udmData[j][udmNameIdx]);
+      var plaId = udmIdIdx > -1 ? String(udmData[j][udmIdIdx]).trim() : "UNKNOWN_ID_" + j;
+
+      // 1. Force uppercase and destroy hidden spaces
+      var cleanedName = rawName.toUpperCase().replace(/[\s\uFEFF\xA0]/g, ''); 
+      
+      // 2. The precise Kill List based on your data profile
+      var invalidValues = ["", "NA", "NONE", "NULL", "-"];
+      var isInvalidName = invalidValues.includes(cleanedName);
+      
+      // If invalid, assign a synthetic name so it gets caught as REMOVED
+      var originalUdmName = isInvalidName ? "UNNAMED_SITE_" + plaId : rawName.trim().toUpperCase();
+      
+      var parsedUdm = extractBaseAndSuffix(originalUdmName);
+      var sanitizedUdmKey = parsedUdm.cleanBase;
+      
+      var isDuplicateBase = false;
+      if (udmTable[sanitizedUdmKey]) {
+        sanitizedUdmKey = sanitizedUdmKey + "_DUPLICATE_" + j;
+        isDuplicateBase = true; // NEW: Set a flag
+      }
+      
+      var coords = getCoords(udmData[j], udmLatIdx, udmLngIdx);
+      
+      udmTable[sanitizedUdmKey] = {
+        plaId: plaId,
+        lat: coords.lat,
+        lng: coords.lng,
+        originalName: isInvalidName ? cleanedName || "BLANK" : originalUdmName, 
+        isGhostSite: isInvalidName, 
+        isDuplicate: isDuplicateBase, // NEW: Save the flag so Section D can see it
+        allowedSuffixSet: parsedUdm.suffixSet, 
+        sArea: udmSAreaIdx > -1 ? udmData[j][udmSAreaIdx] : "",
+        prov: udmProIdx > -1 ? String(udmData[j][udmProIdx]).trim().toUpperCase() : "",
+        mCity: udmMCtyIdx > -1 ? udmData[j][udmMCtyIdx] : "",
+        sAdd: udmSAddIdx > -1 ? udmData[j][udmSAddIdx] : "",
+        trt: udmTrtIdx > -1 ? udmData[j][udmTrtIdx] : "",
+        hSvr: udmHSvrIdx > -1 ? udmData[j][udmHSvrIdx] : "",
+        twrC: udmtwrCIdx > -1 ? udmData[j][udmtwrCIdx] : ""
       };
     }
-    var report = [];
-    var matchedBases = new Set(); 
+
+    // --- B. Synthesize NMS Masterlist ---
+    var siteGroups = {};
+
     for (var j = 1; j < nmsData.length; j++){
-      var row = nmsData[j];
-      var namesToCheck = [{val: row[nIdx.g2], gen: "2G"}, {val: row[nIdx.g4], gen: "4G"}, {val: row[nIdx.g5], gen: "5G"}].filter(item => item.val);
-      namesToCheck.forEach(item => {
-        var parsedNms = extractBaseAndSuffix(item.val);
-        var udmMatch = udmRegistry[parsedNms.cleanBase];
-        let status = "NEW", remarks = "New string detected.";
-        if (udmMatch) {
-          matchedBases.add(parsedNms.cleanBase);
-          var isSubset = Array.from(parsedNms.suffixSet).every(char => udmMatch.allowedSuffixSet.has(char));
-          if (isSubset) { status = "UNCHANGED"; remarks = "Matches UDM Registry."; }
-          else { status = "MISMATCH"; remarks = "Unregistered Suffix Letters. UDM: " + udmMatch.originalName; }
+      var items = [
+        { name: nms2GNameIdx > -1 ? String(nmsData[j][nms2GNameIdx]).trim() : "", gen: "2G" },
+        { name: nms4GNameIdx > -1 ? String(nmsData[j][nms4GNameIdx]).trim() : "", gen: "4G" },
+        { name: nms5GNameIdx > -1 ? String(nmsData[j][nms5GNameIdx]).trim() : "", gen: "5G" }
+      ].filter(i => i.name !== "");
+
+      items.forEach(item => {
+        var parsed = extractBaseAndSuffix(item.name);
+        var bName = parsed.cleanBase; 
+        if (!bName) return;
+
+        if (!siteGroups[bName]) {
+          siteGroups[bName] = {
+            displayBase: parsed.displayBase,
+            suffixes: new Set(),
+            originalEntries: []
+          };
         }
-        let techLabel = item.gen;
-        const s = parsedNms.suffix.toUpperCase();
-        if (item.gen === "4G") {
-          let t = [];
-          if (/[FLWY]/.test(s)) t.push("FDD");
-          if (/H/.test(s)) t.push("TDD");
-          if (/V/.test(s)) t.push("MM");
-          if (t.length > 0) techLabel = `4G-${t.join("/")}`;
-        } else if (item.gen === "5G") {
-          let t = [];
-          if (/M/.test(s)) t.push("MM");
-          if (/[PN]/.test(s)) t.push("NMM");
-          if (t.length > 0) techLabel = `5G-${t.join("/")}`;
+        
+        siteGroups[bName].originalEntries.push({
+          rawName: item.name,
+          baseGen: item.gen,
+          suffix: parsed.suffix
+        });
+
+        for (let char of parsed.suffix) {
+          siteGroups[bName].suffixes.add(char.toUpperCase());
         }
+      });
+    }
+
+    // --- C. Cross-Reference & UNPIVOT Output ---
+    var report = [];
+    var matchedUdmKeys = new Set();
+
+    for (var bName in siteGroups) {
+      var group = siteGroups[bName];
+      var udmRowMatch = udmTable[bName];
+
+      var status = "NEW";
+      var remarks = "Synthesized from NMS.";
+      var inferredLocation = udmRowMatch ? null : inferLocation(group.displayBase);
+
+      if (udmRowMatch) {
+        matchedUdmKeys.add(bName);
+        
+        var nmsSet = group.suffixes;
+        var udmSet = udmRowMatch.allowedSuffixSet;
+
+        var isSameSize = nmsSet.size === udmSet.size;
+        var hasAll = Array.from(nmsSet).every(char => udmSet.has(char));
+
+        if (isSameSize && hasAll) {
+          status = "UNCHANGED";
+          remarks = "Site BCF validated perfectly against UDM.";
+        } else {
+          status = "MISMATCH";
+          remarks = `BCF Mismatch: UDM expects [${udmRowMatch.originalName}].`;
+        }
+      }
+
+      group.originalEntries.forEach(entry => {
+        var specificTechLabel = generateSpecificTechLabel(entry.baseGen, entry.suffix);
+
         report.push({
-          plaId: udmMatch ? udmMatch.plaId : "",
-          matchStatus: status,
-          techName: item.val,
-          baseLocation: parsedNms.displayBase,
-          techGen: techLabel,
-          region: udmMatch ? udmMatch.region : "UNKNOWN",
-          prov: udmMatch ? udmMatch.prov : "",
-          lat: udmMatch ? udmMatch.lat : null,
-          lng: udmMatch ? udmMatch.lng : null,
-          remarks: remarks,
-          sArea: udmMatch ? udmMatch.sArea : "",
-          mCity: udmMatch ? udmMatch.mCity : "",
-          sAdd: udmMatch ? udmMatch.sAdd : "",
-          trt: udmMatch ? udmMatch.trt : "",
-          hSvr: udmMatch ? udmMatch.hSvr : "",
-          twrC: udmMatch ? udmMatch.twrC : ""
+          plaId: udmRowMatch ? udmRowMatch.plaId : "NEW_SITE",
+          matchStatus: status, 
+          techName: entry.rawName, 
+          baseLocation: group.displayBase,
+          techGen: specificTechLabel, 
+          nmsName: entry.rawName, 
+          lat: udmRowMatch ? udmRowMatch.lat : "",
+          lng: udmRowMatch ? udmRowMatch.lng : "",
+          sArea: udmRowMatch ? udmRowMatch.sArea : inferredLocation.area,
+          prov: udmRowMatch ? udmRowMatch.prov : inferredLocation.prov,
+          mCity: udmRowMatch ? udmRowMatch.mCity : inferredLocation.city,
+          sAdd: udmRowMatch ? udmRowMatch.sAdd : "",
+          trt: udmRowMatch ? udmRowMatch.trt : "",
+          hSvr: udmRowMatch ? udmRowMatch.hSvr : "",
+          twrC: udmRowMatch ? udmRowMatch.twrC : towerC(entry.rawName),
+          region: dict(udmRowMatch ? udmRowMatch.prov : inferredLocation.prov),
+          remarks: remarks
         });
       });
     }
-    for (var base in udmRegistry) {
-      if (!matchedBases.has(base)) {
-        var u = udmRegistry[base];
+
+    // --- D. Capture REMOVED Sites ---
+    for (var udmKey in udmTable) {
+      if (!matchedUdmKeys.has(udmKey)) {
+        var u = udmTable[udmKey];
+        
+        // THE FIX: If it's a ghost OR a duplicate, force the PLA_ID into the text!
+        var forceUnique = u.isGhostSite || u.isDuplicate;
+        var uniqueDisplayBase = forceUnique ? u.originalName + " (" + u.plaId + ")" : extractBaseAndSuffix(u.originalName).displayBase;
+        
         report.push({
           plaId: u.plaId, 
           matchStatus: "REMOVED", 
-          techName: u.originalName, 
-          techGen: "UDM Registry",
-          region: u.region,
-          prov: u.prov, lat: u.lat, lng: u.lng, 
-          remarks: "Registry missing from current NMS dump.",
-          sArea: u.sArea, mCity: u.mCity, sAdd: u.sAdd, trt: u.trt, hSvr: u.hSvr, twrC: u.twrC
+          techName: forceUnique ? uniqueDisplayBase : u.originalName, 
+          baseLocation: uniqueDisplayBase, 
+          techGen: "UDM Only", 
+          nmsName: forceUnique ? uniqueDisplayBase : u.originalName,
+          lat: u.lat, 
+          lng: u.lng, 
+          prov: u.prov, 
+          remarks: u.isGhostSite ? "UDM BCF Name was blank/missing." : (u.isDuplicate ? "CRITICAL: UDM Database Collision! Multiple PLA_IDs share this exact BCF Name." : "Site BCF found in UDM but missing from NMS."),
+          sArea: u.sArea, 
+          mCity: u.mCity, 
+          sAdd: u.sAdd, 
+          trt: u.trt, 
+          hSvr: u.hSvr, 
+          twrC: u.twrC
         });
       }
     }
+
     return JSON.stringify({ success: true, data: report, count: report.length });
   } catch (e) {
     return JSON.stringify({ success: false, error: e.toString() });
   }
-}
-function cleanText(str) {
-  if (!str) return "";
-  return String(str).toUpperCase().replace(/\s+/g, " ").replace(/\u00A0/g, " ").trim();
-}
-function dict(prov) {
-  if (!prov) return "";
-  prov = cleanText(prov);
-  const regions = { "REGION IX (ZAMBOANGA PENINSULA)": ["ZAMBOANGA DEL NORTE", "ZAMBOANGA DEL SUR", "ZAMBOANGA SIBUGAY"], "REGION X (NORTHERN MINDANAO)": ["BUKIDNON", "CAMIGUIN", "LANAO DEL NORTE", "MISAMIS OCCIDENTAL", "MISAMIS ORIENTAL"], "REGION XI (DAVAO REGION)": ["DAVAO DE ORO", "DAVAO DEL NORTE", "DAVAO DEL SUR", "DAVAO OCCIDENTAL", "DAVAO ORIENTAL", "COMPOSTELA VALLEY"], "REGION XII (SOCCSKSARGEN)": ["COTABATO", "SARANGANI", "SOUTH COTABATO", "SULTAN KUDARAT", "NORTH COTABATO"], "REGION XIII (CARAGA)": ["AGUSAN DEL NORTE", "AGUSAN DEL SUR", "DINAGAT ISLANDS", "SURIGAO DEL NORTE", "SURIGAO DEL SUR"], "BARMM (BANGSAMORO AUTONOMOUS REGION IN MUSLIM MINDANAO)": ["BASILAN", "LANAO DEL SUR", "MAGUINDANAO DEL NORTE", "MAGUINDANAO DEL SUR", "SULU", "TAWI TAWI"] };
-  for (const [reg, pro] of Object.entries(regions)) { if (pro.includes(prov)) return reg; }
-  return "";
 }

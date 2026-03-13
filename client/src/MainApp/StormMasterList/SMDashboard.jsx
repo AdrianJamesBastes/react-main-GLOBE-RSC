@@ -20,7 +20,6 @@ import fileLight from '../../assets/fileLight.png';
 
 import { useNavigate } from "react-router-dom";
 
-// Note: getTechSplits is removed because we unpivot the columns now
 import { parseLocationData, getShortRegionByProvince } from '../../utils/telecom';
 import { cityToProvinceMap } from '../MapDictionary/TelecomDictionaries';
 import DashboardLayout from '../../components/DashboardLayout';
@@ -76,38 +75,30 @@ export default function SMDashboard() {
     });
   };
 
-const handleSpecificExport = async (exportCategory) => {
+  const handleSpecificExport = async (exportCategory) => {
     setShowExportMenu(false);
     if (results.length === 0) return alert("No data to export.");
 
-    // Dynamic import to keep initial bundle size small
     const XLSX = await import('xlsx');
 
-    // NEW LOGIC: If exporting 'ALL', filter out the 'REMOVED' sites!
     const dataToExport = exportCategory === 'ALL' 
       ? results.filter(row => row.matchStatus !== 'REMOVED') 
       : results.filter(row => row.matchStatus === exportCategory);
 
     if (dataToExport.length === 0) return alert(`There are no "${exportCategory}" sites to export.`);
 
-    // --- NEW: Custom Sorting Logic for the Excel File ---
     const exportStatusOrder = ['NEW', 'MISMATCH', 'REMOVED', 'UNCHANGED'];
     
     dataToExport.sort((a, b) => {
-      // 1. Sort by your specific Status priority
       const orderA = exportStatusOrder.indexOf(a.matchStatus);
       const orderB = exportStatusOrder.indexOf(b.matchStatus);
       if (orderA !== orderB) return orderA - orderB;
 
-      // 2. If they have the same Status, sort them alphabetically by Base Name
       const baseA = a.baseLocation || "";
       const baseB = b.baseLocation || "";
       return baseA.localeCompare(baseB, undefined, { numeric: true, sensitivity: 'base' });
     });
-    // ---------------------------------------------------
 
-    // Flat results: each row is already one technology entry from the backend Gold layer
-   // Flat results: each row is already one technology entry from the unpivoting step
     const excelData = dataToExport.map(row => {
       const geo = parseLocationData(row.baseLocation);
       
@@ -121,7 +112,7 @@ const handleSpecificExport = async (exportCategory) => {
 
       return {
         "Region": "MIN",
-        "PLA ID": row.plaId || "",
+        "PLA ID": row.plaId === "NEW_SITE" ? "" : (row.plaId || ""),
         "PLA Status": "",
         "Area": row.sArea || "",
         "Region ": (row.region || geo.region || reg) || "",
@@ -131,8 +122,8 @@ const handleSpecificExport = async (exportCategory) => {
         "Site Address": row.sAdd || "",
         "Longitude": row.lng || "",
         "Latitude": row.lat || "",
-        "Technology": row.techGen || "UDM Only", // <-- FIXED: Pulls the 4G-FDD label             
-        "Tech Name/ BTS": row.nmsName || row.techName, // <-- FIXED: Pulls the specific NMS string
+        "Technology": row.techGen || "UDM Only",            
+        "Tech Name/ BTS": row.nmsName || row.techName, 
         "Tech Description": "",
         "Tech Status": "",
         "Site Owner": row.twrC || geo.siteCode || "GLOBE TELECOM",
@@ -142,6 +133,7 @@ const handleSpecificExport = async (exportCategory) => {
         "Remarks Status": row.matchStatus || ""
       };
     });
+
     const worksheet = XLSX.utils.json_to_sheet(excelData);
     const headers = Object.keys(excelData[0]);
     
@@ -175,19 +167,8 @@ const handleSpecificExport = async (exportCategory) => {
       const text1 = await readFileAsText(monitorFile1);
       const text2 = await readFileAsText(monitorFile2);
 
-      // --- CHUNKING LOGIC FOR GOOGLE APPS SCRIPT ---
-      // We break the strings into 50kb chunks to avoid the 50mb limit and stabilize the RPC bridge.
       const sendInChunks = (file1, file2) => {
         return new Promise((resolve, reject) => {
-          const CHUNK_SIZE = 50000;
-          const chunks1 = [];
-          const chunks2 = [];
-          
-          for (let i = 0; i < file1.length; i += CHUNK_SIZE) chunks1.push(file1.substring(i, i + CHUNK_SIZE));
-          for (let i = 0; i < file2.length; i += CHUNK_SIZE) chunks2.push(file2.substring(i, i + CHUNK_SIZE));
-
-          // In a real industrial setup, you'd call a 'receiveChunk' function multiple times.
-          // For now, we simulate the 'Gold' path or direct call if data is small.
           if (window.google && window.google.script) {
              window.google.script.run
                .withSuccessHandler((resRaw) => {
@@ -198,7 +179,6 @@ const handleSpecificExport = async (exportCategory) => {
                .withFailureHandler(reject)
                .processCSVComparison(file1, file2);
           } else {
-             // Mocking behavior for development
              setTimeout(() => {
                const mockData = [];
                const statuses = ["NEW", "MISMATCH", "UNCHANGED", "REMOVED"];
@@ -206,13 +186,16 @@ const handleSpecificExport = async (exportCategory) => {
                  mockData.push({ 
                    plaId: `MIN_${String(i).padStart(4, '0')}`, 
                    matchStatus: statuses[(i-1) % statuses.length], 
-                   techName: `SITENAME${i}DDNLYK`, 
+                   techName: `SITENAME${i}DDN`, 
                    baseLocation: `SITENAME${i}DDN`,
                    techGen: "4G-FDD",
+                   nmsName: `SITENAME${i}DDNLYK`,
                    remarks: "Mock data generated.",
                    lat: (7.0 + (Math.random() * 0.5)).toFixed(5), 
-                   lng: (125.4 + (Math.random() * 0.5)).toFixed(5)
-                 });               }
+                   lng: (125.4 + (Math.random() * 0.5)).toFixed(5),
+                   sArea: "N/A", prov: "UNKNOWN", mCity: "UNKNOWN", sAdd: "N/A", trt: "N/A", hSvr: "N/A", twrC: "N/A"
+                 });
+               }
                resolve(mockData);
              }, 1000);
           }
@@ -220,42 +203,7 @@ const handleSpecificExport = async (exportCategory) => {
       };
 
       const data = await sendInChunks(text1, text2);
-      
-      // RESTORING FRONTEND UNPIVOTING (Matches Original Backend Contract)
-      const flattenedResults = data.flatMap((row, i) => {
-        const buildSubRows = (origStringGroup, baseGen) => {
-          if (!origStringGroup) return [];
-          return origStringGroup.split(" | ").map(nmsName => {
-            const suffixMatch = nmsName.match(/(?:ID|AS|[XYLFWKHVZJBMNPRT])+$/i);
-            const suffix = suffixMatch ? suffixMatch[0].toUpperCase() : "";
-            let label = baseGen;
-            
-            if (baseGen === "4G") {
-              let types = [];
-              if (/[FLWY]/i.test(suffix)) types.push("FDD");
-              if (/H/i.test(suffix)) types.push("TDD");
-              if (/V/i.test(suffix)) types.push("MM");
-              if (types.length > 0) label = `4G-${types.join("/")}`;
-            } else if (baseGen === "5G") {
-              let types = [];
-              if (/M/i.test(suffix)) types.push("MM");
-              if (/[PN]/i.test(suffix)) types.push("NMM");
-              if (types.length > 0) label = `5G-${types.join("/")}`;
-            }
-            return { ...row, techGen: label, nmsName: nmsName, parentIndex: i };
-          });
-        };
-
-        const subRows = [
-          ...buildSubRows(row.original2G, "2G"),
-          ...buildSubRows(row.original4G, "4G"),
-          ...buildSubRows(row.original5G, "5G")
-        ];
-        
-        return subRows.length > 0 ? subRows : [{ ...row, techGen: "", nmsName: row.techName, parentIndex: i }];
-      });
-
-      setResults(flattenedResults);
+      setResults(data);
       setIsLoading(false);
     } catch (error) {
       alert("Error: " + error);
@@ -264,11 +212,10 @@ const handleSpecificExport = async (exportCategory) => {
   };
 
   const stats = useMemo(() => {
-    // Unique sites for statistics
-    const uniqueSites = Array.from(new Set(results.map(r => r.plaId || r.techName)));
     const siteMap = new Map();
     results.forEach(r => {
-      const key = r.plaId || r.techName;
+      // FIX: Use baseLocation as the true unique identifier for sites
+      const key = r.baseLocation; 
       if (!siteMap.has(key)) siteMap.set(key, r.matchStatus);
     });
 
@@ -289,7 +236,7 @@ const handleSpecificExport = async (exportCategory) => {
 
     return results
       .filter(row => {
-        const matchesSearch = [row.plaId, row.techName, row.baseLocation, row.remarks, row.nmsName]
+        const matchesSearch = [row.plaId, row.baseLocation, row.remarks, row.nmsName]
           .filter(Boolean)
           .some(value => value.toString().toLowerCase().includes(term));
         const matchesStatus = filterStatus === 'ALL' ? true : row.matchStatus === filterStatus;
@@ -300,10 +247,13 @@ const handleSpecificExport = async (exportCategory) => {
         const orderB = statusOrder.indexOf(b.matchStatus);
         if (orderA !== orderB) return orderA - orderB;
 
+        // Sort by baseLocation so physical sites stay grouped together
         const baseA = a.baseLocation || "";
         const baseB = b.baseLocation || "";
         const baseCompare = baseA.localeCompare(baseB, undefined, { numeric: true, sensitivity: 'base' });
-        if (baseCompare === 0) return (a.plaId || "").localeCompare(b.plaId || "");
+        
+        // If same base location, sort by the specific tech name
+        if (baseCompare === 0) return (a.nmsName || "").localeCompare(b.nmsName || "");
         return baseCompare;
       });
   }, [results, searchTerm, filterStatus]);
@@ -419,7 +369,9 @@ const handleSpecificExport = async (exportCategory) => {
                   <div className="details-content">
                     <div>
                       <span className="input-label">PLA_ID</span>
-                      <div style={{ fontSize: '1.3rem', fontWeight: 'bold' }}>{selectedRowDetails.plaId}</div>
+                      <div style={{ fontSize: '1.3rem', fontWeight: 'bold' }}>
+                        {selectedRowDetails.plaId === "NEW_SITE" ? "N/A" : selectedRowDetails.plaId}
+                      </div>
                     </div>
                     <div>
                       <span className="input-label">Status</span>
@@ -432,7 +384,7 @@ const handleSpecificExport = async (exportCategory) => {
                     <div className="details-box">
                       <span className="input-label">Tech Name (String)</span>
                       <div style={{ fontWeight: 'bold', marginTop: '4px', wordBreak: 'break-word' }}>
-                        {selectedRowDetails.techName}
+                        {selectedRowDetails.nmsName || selectedRowDetails.baseLocation}
                       </div>
                     </div>
                     <div className="details-box">
@@ -565,32 +517,33 @@ const handleSpecificExport = async (exportCategory) => {
                     </thead>
                     <tbody>
                       {filteredResults.map((row, i) => {
-                        const isExactRow = selectedSite?.id === row.plaId && selectedSite?.techName === row.techName;
-                        const isSameGroup = selectedSite?.id === row.plaId && !isExactRow;
+                        // FIX: Group visually using baseLocation instead of plaId
+                        const isExactRow = selectedSite?.nmsName === row.nmsName;
+                        const isSameGroup = selectedSite?.baseLocation === row.baseLocation && !isExactRow;
                         
                         let rowStyle = { cursor: "pointer", transition: "background-color 0.2s" };
                         if (isExactRow) rowStyle.backgroundColor = "rgba(0, 123, 255, 0.2)";
                         else if (isSameGroup) rowStyle.backgroundColor = "rgba(128, 128, 128, 0.15)";
 
-                        // Check if this is the last item of its logical group for border styling
                         const nextRow = filteredResults[i + 1];
-                        const isLastOfGroup = !nextRow || nextRow.plaId !== row.plaId;
+                        const isLastOfGroup = !nextRow || nextRow.baseLocation !== row.baseLocation;
                         if (isLastOfGroup) rowStyle.borderBottom = "2px solid var(--border-color)";
 
-                        // Visual grouping logic: only show primary site info on the first row of a group
                         const prevRow = filteredResults[i - 1];
-                        const isFirstOfGroup = !prevRow || prevRow.plaId !== row.plaId;
+                        const isFirstOfGroup = !prevRow || prevRow.baseLocation !== row.baseLocation;
 
                         return (
-                          <tr key={`${row.plaId}-${row.nmsName}-${i}`} className="row-hover" style={rowStyle}
+                          <tr key={`${row.baseLocation}-${row.nmsName}-${i}`} className="row-hover" style={rowStyle}
                             onClick={() => {
                               const lat = parseFloat(row.lat);
                               const lng = parseFloat(row.lng);
-                              setSelectedSite({ lat, lng, id: row.plaId, techName: row.techName, zoom: 18 });
+                              setSelectedSite({ lat, lng, id: row.plaId, baseLocation: row.baseLocation, nmsName: row.nmsName, zoom: 18 });
                               setSelectedRowDetails(row);
                             }}
                           >
-                            <td className="font-bold">{isFirstOfGroup ? row.plaId : ""}</td>
+                            <td className="font-bold">
+                              {isFirstOfGroup ? (row.plaId === "NEW_SITE" ? "N/A" : row.plaId) : ""}
+                            </td>
                             <td>
                               {isFirstOfGroup && (
                                 <span className={`status-badge ${row.matchStatus.toLowerCase()}`}>
@@ -631,7 +584,7 @@ const handleSpecificExport = async (exportCategory) => {
         <div className="map-modal-overlay">
           <div className="map-modal-content">
             <div className="map-modal-header">
-              <h3>Site Location: {selectedSite.id || "Region Map"}</h3>
+              <h3>Site Location: {selectedSite.baseLocation || "Region Map"}</h3>
               <button className="close-btn" onClick={() => setShowBigMap(false)}> Close</button>
             </div>
             <div className="big-map-wrapper">
