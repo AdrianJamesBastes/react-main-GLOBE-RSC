@@ -50,20 +50,28 @@ export default function SMDashboard() {
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [selectedRowDetails, setSelectedRowDetails] = useState(null);
 
-  // --- AI AGENT STATES ---
   const [aiCommand, setAiCommand] = useState("");
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [showAiPanel, setShowAiPanel] = useState(false); 
   
   const [chatHistory, setChatHistory] = useState([
-    { sender: 'ai', text: "Hello Adrian! I'm your Globe RSC Copilot. You can say hi, or ask me to update site remarks and statuses." }
+    { sender: 'ai', text: "Hello Adrian! I'm your veRiSynC AI Copilot. You can say hi, or ask me to update site remarks and statuses." }
   ]);
-  const chatEndRef = useRef(null);
+  
+  const chatContainerRef = useRef(null);
+  const sidebarTopRef = useRef(null);
 
-  // Auto-scroll chat to bottom
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatHistory, isAiLoading]);
+    if (sidebarTopRef.current) {
+      sidebarTopRef.current.scrollLeft = 0;
+    }
+  }, [showAiPanel, selectedRowDetails]);
+
+  useEffect(() => {
+    if (showAiPanel && chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    }
+  }, [chatHistory, isAiLoading, showAiPanel]);
 
   const currentLogo = isDarkMode ? globeLogoDark : globeLogoLight;
 
@@ -81,7 +89,7 @@ export default function SMDashboard() {
     });
   };
 
-  // --- UPGRADED AI EXECUTION (LIGHTWEIGHT STRINGIFIED PAYLOAD & ARMOR) ---
+ // --- UPGRADED AI EXECUTION (ADVANCED SNIPER FILTER) ---
   const handleAiExecute = () => {
     if (!aiCommand.trim()) return;
     
@@ -92,8 +100,39 @@ export default function SMDashboard() {
     
     if (window.google && window.google.script) {
       
-      // 🚀 THE DIET: Only send exact fields to reduce payload size
-      const lightweightData = results.map(r => ({
+      // 🚀 THE FIX: Expanded Ignore List to block conversational words!
+      const ignoreWords = [
+        // Actions
+        "CHANGE", "UPDATE", "SET", "MODIFY", "STATUS", "MAKE", "PUT", "ADD",
+        // Prepositions & Conjunctions
+        "TO", "FROM", "THE", "IN", "OF", "ON", "FOR", "AND", "WITH",
+        // Statuses
+        "VERIFIED", "NEW", "MISMATCH", "REMOVED", "UNCHANGED", 
+        // Telecom Nouns
+        "SITE", "SITES", "REMARK", "REMARKS", "ID", "PLA", "BCF", "NAME",
+        // Conversational Filler
+        "PLEASE", "CAN", "YOU", "COULD", "WOULD", "JUST", "HELP", "ME", "WANT", "NEED",
+        // Queries
+        "LIST", "SHOW", "FIND", "COUNT", "ALL"
+      ];
+      
+      const searchWords = userMessage
+        .toUpperCase()
+        .replace(/[^A-Z0-9_-]/g, ' ') 
+        .split(' ')
+        .filter(w => w.length > 2 && !ignoreWords.includes(w));
+        
+      let relevantData = [];
+      if (searchWords.length > 0) {
+        relevantData = results.filter(r => {
+          const rowData = `${r.plaId} ${r.baseLocation} ${r.nmsName}`.toUpperCase();
+          return searchWords.some(word => rowData.includes(word));
+        });
+      }
+
+      let finalDataToSend = relevantData.length > 0 ? relevantData.slice(0, 250) : results.slice(0, 50);
+
+      const lightweightData = finalDataToSend.map(r => ({
         plaId: r.plaId,
         matchStatus: r.matchStatus,
         baseLocation: r.baseLocation,
@@ -101,7 +140,6 @@ export default function SMDashboard() {
         remarks: r.remarks
       }));
 
-      // 🛡️ THE FIX: Convert the massive array into a single text string so Google doesn't drop it!
       const dataString = JSON.stringify(lightweightData);
 
       window.google.script.run
@@ -113,64 +151,56 @@ export default function SMDashboard() {
             return;
           }
 
-          // 1. Handle API/Script Errors
           if (aiResponse.error) {
-            setChatHistory(prev => [...prev, { sender: 'ai', text: `⚠️ System Error: ${aiResponse.error}`, isError: true }]);
+            setChatHistory(prev => [...prev, { sender: 'system', text: `⚠️ System Error: ${aiResponse.error}`, isError: true }]);
             return;
           }
           
-          // 2. Add AI's conversational reply
-          if (aiResponse.reply) {
-            setChatHistory(prev => [...prev, { sender: 'ai', text: aiResponse.reply }]);
+          const replyText = aiResponse.reply || aiResponse.response || aiResponse.message || aiResponse.text;
+          
+          if (replyText) {
+            setChatHistory(prev => [...prev, { sender: 'ai', text: replyText }]);
+          } else if (!aiResponse.mutations || aiResponse.mutations.length === 0) {
+            setChatHistory(prev => [...prev, { sender: 'ai', text: `🤖 [Raw Output]: ${JSON.stringify(aiResponse)}` }]);
           }
 
-          // 3. ARMOR: Strictly validate the mutations array before touching state
           if (aiResponse.mutations && Array.isArray(aiResponse.mutations) && aiResponse.mutations.length > 0) {
             try {
               let actualChangesCount = 0;
-              
               const updatedResults = results.map(row => {
                 const change = aiResponse.mutations.find(c => c && c.plaId === row.plaId);
-                
-                // ARMOR: Ensure both the change AND the 'updates' object actually exist
                 if (change && change.updates) {
                   actualChangesCount++;
-                  
-                  // ARMOR: Provide safe fallbacks so undefined values don't crash the table
                   const safeStatus = change.updates.matchStatus || row.matchStatus || 'UNCHANGED';
                   const safeRemarks = change.updates.remarks ? `(AI) ${change.updates.remarks}` : row.remarks;
                   
                   return { 
                     ...row, 
-                    ...change.updates, 
                     matchStatus: safeStatus, 
                     remarks: safeRemarks 
                   };
                 }
-                return row; // Return the row untouched if the AI data is garbage
+                return row; 
               });
               
-              // Only update React state if valid changes were found
               if (actualChangesCount > 0) {
                 setResults(updatedResults);
                 setChatHistory(prev => [...prev, { sender: 'system', text: `✓ Successfully applied updates to ${actualChangesCount} rows.` }]);
               }
-              
             } catch (crashError) {
-              console.error("AI Mutation Crash Prevented:", crashError);
-              setChatHistory(prev => [...prev, { sender: 'system', text: `⚠️ AI sent corrupted data. Your table was protected.`, isError: true }]);
+              setChatHistory(prev => [...prev, { sender: 'system', text: `⚠️ Table protected from corrupted AI data.`, isError: true }]);
             }
           }
         })
         .withFailureHandler((err) => {
           setIsAiLoading(false);
-          setChatHistory(prev => [...prev, { sender: 'ai', text: `⚠️ Connection Failed: ${err.message || err}`, isError: true }]);
+          setChatHistory(prev => [...prev, { sender: 'system', text: `⚠️ Network Timeout: ${err.message || err}`, isError: true }]);
         })
-        .processAIAgentCommand(userMessage, dataString); // <-- Sending the stringified data here!
+        .processAIAgentCommand(userMessage, dataString);
     } else {
       setTimeout(() => {
         setIsAiLoading(false);
-        setChatHistory(prev => [...prev, { sender: 'ai', text: "I'm currently running in Local Mock mode since Google Apps Script is offline. 🔌" }]);
+        setChatHistory(prev => [...prev, { sender: 'ai', text: "I'm running locally. Google Apps Script is offline. 🔌" }]);
       }, 1000);
     }
   };
@@ -397,11 +427,13 @@ export default function SMDashboard() {
       fontSize: '0.85rem'
     };
 
+    // THE FIX: Added boxSizing to force columns to respect their percentages!
     const columnStyle = {
       whiteSpace: 'nowrap',
       overflow: 'hidden',
       textOverflow: 'ellipsis',
-      paddingRight: '15px'
+      paddingRight: '15px',
+      boxSizing: 'border-box' 
     };
 
     return (
@@ -413,7 +445,6 @@ export default function SMDashboard() {
           const lng = parseFloat(row.lng);
           setSelectedSite({ lat, lng, id: row.plaId, baseLocation: row.baseLocation, nmsName: row.nmsName, zoom: 18 });
           setSelectedRowDetails(row);
-          if (showAiPanel) setShowAiPanel(false); 
         }}
       >
         <div style={{ ...columnStyle, width: '10%', fontWeight: 'bold' }}>
@@ -422,8 +453,8 @@ export default function SMDashboard() {
         <div style={{ ...columnStyle, width: '10%' }}>
           {isFirstOfGroup && (
             <span className={`status-badge ${(row.matchStatus || 'UNCHANGED').toLowerCase()}`} style={{ fontSize: '0.7rem' }}>
-            {row.matchStatus || 'UNCHANGED'}
-          </span>
+              {row.matchStatus || 'UNCHANGED'}
+            </span>
           )}
         </div>
         <div style={{ ...columnStyle, width: '20%', fontWeight: '500' }}>
@@ -498,17 +529,16 @@ export default function SMDashboard() {
     >
       <main className="main-layout">
         <aside className="sidebar">
-          <div className="sidebar-top-section">
-            
+          
+          <div className="sidebar-top-section" ref={sidebarTopRef} style={{ flex: showAiPanel ? '1' : '0 0 350px' }}>
             <div className={`sidebar-carousel ${showAiPanel ? 'show-ai' : (selectedRowDetails ? 'show-details' : '')}`}>
               
-              {/* PANEL 1: DATA INPUT */}
               <div className="carousel-panel">
-                <h3 style={{ marginTop: 0, marginBottom: '20px', fontSize: '1.2rem' }}>Data Input</h3>
+                <h3 style={{ marginTop: 0, marginBottom: '15px', fontSize: '1.1rem' }}>Data Input</h3>
                 <div className="upload-group">
                   <span className="input-label">NMS CSV</span>
                   <div className="file-drop-area">
-                    <img src={isDarkMode ? fileDark : fileLight} className="upload-icon" alt="icon" />
+                    <img src={isDarkMode ? fileDark : fileLight} className="upload-icon" alt="icon" style={{ width: '20px' }} />
                     <span className="file-msg">{monitorFile1 ? monitorFile1.name : "Drag & drop or click"}</span>
                     <input className="file-input" type="file" accept=".csv" onChange={(e) => handleFileChange(e, setMonitorFile1)} />
                   </div>
@@ -516,21 +546,20 @@ export default function SMDashboard() {
                 <div className="upload-group">
                   <span className="input-label">UDM CSV</span>
                   <div className="file-drop-area">
-                    <img src={isDarkMode ? fileDark : fileLight} className="upload-icon" alt="icon" />
+                    <img src={isDarkMode ? fileDark : fileLight} className="upload-icon" alt="icon" style={{ width: '20px' }} />
                     <span className="file-msg">{monitorFile2 ? monitorFile2.name : "Drag & drop or click"}</span>
                     <input className="file-input" type="file" accept=".csv" onChange={(e) => handleFileChange(e, setMonitorFile2)} />
                   </div>
                 </div>
-                <button className="btn primary-filled scan-btn full-width" onClick={handleScan} disabled={isLoading} style={{ marginTop: 'auto' }}>
-                  <img src={search} alt="Scan" className="btn-icon" />
+                <button className="btn primary-filled scan-btn full-width" onClick={handleScan} disabled={isLoading} style={{ marginTop: 'auto', padding: '12px' }}>
+                  <img src={search} alt="Scan" className="btn-icon" style={{ width: '16px' }} />
                   <span>{isLoading ? "Scanning..." : "Scan Files"}</span>
                 </button>
               </div>
 
-              {/* PANEL 2: SITE DETAILS */}
               <div className="carousel-panel">
                 <div className="details-header">
-                  <button className="back-btn" onClick={() => setSelectedRowDetails(null)} style={{ background: 'transparent', padding: '4px' }}>
+                  <button className="back-btn" onClick={() => setSelectedRowDetails(null)}>
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
                   </button>
                   <h3 style={{ margin: 0, fontSize: '1.2rem' }}>Site Details</h3>
@@ -564,82 +593,94 @@ export default function SMDashboard() {
                         {selectedRowDetails.remarks}
                       </div>
                     </div>
-                    <div>
-                      <span className="input-label">Location Profile</span>
-                      <div className="details-box" style={{ fontFamily: 'monospace', fontSize: '0.9rem', marginTop: '6px' }}>
-                        Lat: {selectedRowDetails.lat}<br/>
-                        Lng: {selectedRowDetails.lng}
-                      </div>
-                    </div>
                   </div>
                 )}
               </div>
 
-              {/* PANEL 3: AI AGENT (FIXED LAYOUT - FULL HEIGHT) */}
-              <div className="carousel-panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', height: '100%' }}>
-                
-                {/* Header */}
-                <div className="details-header" style={{ margin: 0, padding: '2rem 2rem 1rem 2rem', flexShrink: 0, borderBottom: 'none' }}>
-                  <button className="back-btn" onClick={() => setShowAiPanel(false)} style={{ background: 'transparent', padding: '8px 10px 8px 8px', marginLeft: '30px', marginRight: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="15 18 9 12 15 6"></polyline>
-                    </svg>
+              <div className="carousel-panel" style={{ padding: 0 }}>
+                <div style={{ padding: '2rem 1.5rem 1rem 1.5rem', borderBottom: '1px solid var(--border-light)', display: 'flex', alignItems: 'center', gap: '12px', background: isDarkMode ? 'rgba(17, 28, 68, 0.95)' : 'rgba(255, 255, 255, 0.85)', backdropFilter: 'blur(24px)', position: 'sticky', top: 0, zIndex: 10 }}>
+                  <button className="back-btn" onClick={() => setShowAiPanel(false)}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
                   </button>
-                  <h3 style={{ margin: 0, fontSize: '1.2rem' }}>veRiSynC AI</h3>
+                  <h3 style={{ margin: 0, fontSize: '1.2rem', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}>
+                    <span style={{ fontSize: '1.4rem' }}>✨</span> veRiSynC AI
+                  </h3>
                 </div>
                 
-                {/* Body Area (Expands to fill space beautifully) */}
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '0 2rem 2rem 2rem', gap: '15px' }}>
-                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.5', margin: 0 }}>
-                    Ask veRiSynC AI to verify sites, add remarks, or fix discrepancies across your current dataset.
-                  </p>
+                <div ref={chatContainerRef} style={{ flex: 1, overflowY: 'auto', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                  {chatHistory.map((msg, idx) => (
+                    <div key={idx} style={{ 
+                      alignSelf: msg.sender === 'user' ? 'flex-end' : (msg.sender === 'system' ? 'center' : 'flex-start'),
+                      maxWidth: msg.sender === 'system' ? '100%' : '85%',
+                      display: 'flex',
+                      flexDirection: 'column'
+                    }}>
+                      <div style={{
+                        padding: msg.sender === 'system' ? '6px 12px' : '10px 14px',
+                        borderRadius: msg.sender === 'user' ? '16px 16px 0 16px' : (msg.sender === 'system' ? '20px' : '16px 16px 16px 0'),
+                        background: msg.sender === 'user' ? 'var(--brand-purple)' : (msg.sender === 'system' ? 'rgba(13, 177, 92, 0.15)' : 'var(--bg-input)'),
+                        color: msg.sender === 'user' ? 'white' : (msg.sender === 'system' ? '#0db15c' : (msg.isError ? '#f02849' : 'var(--text-primary)')),
+                        fontSize: msg.sender === 'system' ? '0.75rem' : '0.85rem',
+                        lineHeight: '1.4',
+                        border: msg.sender === 'ai' ? '1px solid var(--border-light)' : 'none',
+                        fontWeight: msg.sender === 'system' ? 'bold' : 'normal'
+                      }}>
+                        {msg.text}
+                      </div>
+                    </div>
+                  ))}
                   
+                  {isAiLoading && (
+                    <div style={{ alignSelf: 'flex-start', background: 'var(--bg-input)', padding: '10px 14px', borderRadius: '16px 16px 16px 0', border: '1px solid var(--border-light)' }}>
+                      <span style={{ display: 'inline-block', animation: 'logo-pulse 1s infinite', fontSize: '0.85rem' }}>🤖 Thinking...</span>
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ padding: '1rem 1.5rem 1.5rem 1.5rem', borderTop: '1px solid var(--border-light)', display: 'flex', gap: '10px', position: 'sticky', bottom: 0, background: 'var(--bg-card)' }}>
                   <textarea 
-                    placeholder="e.g., 'Verify all sites in Panabo' or 'Add remark to MIN604 checking with field engineer'..." 
+                    placeholder="Message Gemini..." 
                     value={aiCommand}
                     onChange={(e) => setAiCommand(e.target.value)}
                     onKeyDown={(e) => {
-                      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleAiExecute();
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleAiExecute();
+                      }
                     }}
                     style={{ 
                       flex: 1, 
-                      width: '100%', 
-                      padding: '15px',
-                      borderRadius: '12px',
+                      minHeight: '40px',
+                      maxHeight: '100px',
+                      padding: '10px 14px',
+                      borderRadius: '20px',
                       background: 'var(--bg-input)', 
                       border: '1px solid var(--border-color)', 
                       color: 'var(--text-primary)',
-                      fontSize: '0.95rem',
+                      fontSize: '0.85rem',
                       resize: 'none',
                       fontFamily: 'inherit',
-                      boxSizing: 'border-box'
+                      boxSizing: 'border-box',
+                      lineHeight: '1.4'
                     }}
                   />
-                  
                   <button 
                     onClick={handleAiExecute}
-                    disabled={isAiLoading || !aiCommand}
-                    className="btn primary-filled full-width"
-                    style={{ padding: '14px', display: 'flex', justifyContent: 'center', gap: '10px', alignItems: 'center', flexShrink: 0 }}
+                    disabled={isAiLoading || !aiCommand.trim()}
+                    className="btn primary-filled"
+                    style={{ width: '40px', height: '40px', padding: 0, borderRadius: '50%', display: 'flex', justifyContent: 'center', alignItems: 'center', flexShrink: 0 }}
                   >
-                    {isAiLoading ? "Thinking..." : (
-                      <>
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <line x1="22" y1="2" x2="11" y2="13"></line>
-                          <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                        </svg>
-                        Execute Command
-                      </>
-                    )}
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="22" y1="2" x2="11" y2="13"></line>
+                      <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
                   </button>
                 </div>
-
               </div>
               
             </div>
           </div>
 
-          {/* THE UI FIX: Hides the map conditionally so the AI panel can expand! */}
           <div className="sidebar-map-wrapper" style={{ display: showAiPanel ? 'none' : 'flex' }}>
             <div className="map-floating-header">
               <span className="floating-title">Site Visualizer</span>
@@ -653,19 +694,20 @@ export default function SMDashboard() {
               </button>
             </div>
             <div className="mini-map">
-              <MapVisualizer selectedSite={selectedSite} filteredResults={filteredResults} isExpanded={false} />
+              {!showAiPanel && (
+                <MapVisualizer selectedSite={selectedSite} filteredResults={filteredResults} isExpanded={false} />
+              )}
             </div>
           </div>
+
         </aside>
 
         <section className="content-area">
 
-          {/* THE SLEEK SIDE TAB */}
           <div 
             className={`ai-side-tab ${showAiPanel ? 'active' : ''}`}
             onClick={() => {
               setShowAiPanel(!showAiPanel);
-              if (!showAiPanel) setSelectedRowDetails(null); 
             }}
           >
             <span style={{ fontSize: '1rem', transform: 'rotate(90deg)' }}>{showAiPanel ? "✕" : "</>"}</span>
@@ -752,21 +794,22 @@ export default function SMDashboard() {
               {results.length > 0 ? (
                 <div className="table-wrapper" style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
                   
+                  {/* THE FIX: Header padding matches the scroll offset perfectly and elements use border-box */}
                   <div style={{ 
                     display: 'flex', 
-                    padding: '12px 20px', 
+                    padding: '12px 35px 12px 20px', 
                     fontWeight: 'bold', 
                     borderBottom: '2px solid var(--border-color)', 
                     backgroundColor: 'var(--bg-secondary)',
                     textTransform: 'uppercase',
                     fontSize: '0.8rem'
                   }}>
-                    <div style={{ width: '10%' }}>PLA_ID</div>
-                    <div style={{ width: '10%' }}>Status</div>
-                    <div style={{ width: '20%' }}>Base Name</div>
-                    <div style={{ width: '10%', color: '#1a73e8' }}>Tech</div>
-                    <div style={{ width: '25%', color: '#1a73e8' }}>BCF NAME</div>
-                    <div style={{ width: '25%' }}>Remarks</div>
+                    <div style={{ width: '10%', paddingRight: '15px', boxSizing: 'border-box' }}>PLA_ID</div>
+                    <div style={{ width: '10%', paddingRight: '15px', boxSizing: 'border-box' }}>Status</div>
+                    <div style={{ width: '20%', paddingRight: '15px', boxSizing: 'border-box' }}>Base Name</div>
+                    <div style={{ width: '10%', color: '#1a73e8', paddingRight: '15px', boxSizing: 'border-box' }}>Tech</div>
+                    <div style={{ width: '25%', color: '#1a73e8', paddingRight: '15px', boxSizing: 'border-box' }}>BCF NAME</div>
+                    <div style={{ width: '25%', paddingRight: '15px', boxSizing: 'border-box' }}>Remarks</div>
                   </div>
                   
                   <div style={{ flex: 1, width: '100%' }}>

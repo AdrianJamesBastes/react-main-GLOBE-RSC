@@ -52,7 +52,10 @@ body.dark-mode .top-bar {
 }
 
 /* =========================================================
-   3. MODERN SLIDING SIDEBAR
+   3. MODERN SLIDING SIDEBAR (3-PANEL RESTORED)
+========================================================= */
+/* =========================================================
+   3. MODERN SLIDING SIDEBAR (COMPACT & STICKY)
 ========================================================= */
 .sidebar {
   width: 320px;
@@ -73,41 +76,45 @@ body.dark-mode .top-bar {
   margin-bottom: 30px;
 }
 
-.sidebar-top-section {
-  flex: 1;
-  overflow: hidden;
-  position: relative;
-  min-height: 380px;
+.sidebar-top-section { 
+  /* Height is now dynamically controlled by React! */
+  overflow: hidden; 
+  position: relative; 
+  transition: all 0.3s ease; 
 }
 
-/* 3 Panels now (Input, Details, AI) */
 .sidebar-carousel { 
   display: flex; 
+  position: absolute; 
+  inset: 0; 
   width: 300%; 
   height: 100%; 
+  transform: translateX(0); 
   transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1); 
+  will-change: transform;
 }
 
-.sidebar-carousel.show-details { transform: translateX(-33.333%); }
-.sidebar-carousel.show-ai { transform: translateX(-66.666%); }
+.sidebar-carousel.show-details { transform: translateX(-33.333333%); }
+.sidebar-carousel.show-ai { transform: translateX(-66.666666%); }
 
 .carousel-panel { 
-  width: 33.333%; 
+  flex: 0 0 33.333333%; 
+  max-width: 33.333333%;
   height: 100%; 
-  padding: 0 2rem 2rem 2rem; 
+  padding: 0 1.5rem 1.5rem 1.5rem; /* COMPACTED */
   box-sizing: border-box; 
   display: flex; 
   flex-direction: column; 
-  overflow-y: auto; 
+  overflow: hidden; /* LOCKED - No scrolling */
   background-color: transparent; 
 }
 
 .carousel-panel:not(:has(.details-header)) {
-  padding-top: 2.5rem;
+  padding-top: 1.5rem; /* COMPACTED */
 }
 
 .upload-group {
-  margin-bottom: 1.5rem;
+  margin-bottom: 1rem; /* COMPACTED */
   position: relative;
   z-index: 1;
 }
@@ -116,7 +123,7 @@ body.dark-mode .top-bar {
   display: block;
   font-size: 0.85rem;
   font-weight: 600;
-  margin-bottom: 8px;
+  margin-bottom: 6px; /* COMPACTED */
   color: var(--text-secondary);
 }
 
@@ -124,12 +131,12 @@ body.dark-mode .top-bar {
   display: flex; 
   flex-direction: row;
   align-items: center;
-  gap: 30px;
-  min-height: 50px;
+  gap: 15px; /* COMPACTED */
+  min-height: 45px; /* COMPACTED */
   position: relative;
   background: var(--bg-input); 
   border-radius: var(--radius-btn);
-  padding: 5px 10px;
+  padding: 5px 15px;
   border: 1px solid var(--border-light);
   transition: all 0.3s ease;
   cursor: pointer;
@@ -179,12 +186,11 @@ body.dark-mode .file-drop-area:hover {
   position: sticky;
   top: 0;
   z-index: 100;
-  margin: 0 -2rem 1.5rem -2rem !important; 
-  padding: 2rem 2rem 1rem 2rem; 
+  margin: 0 -1.5rem 1.5rem -1.5rem !important; 
+  padding: 1.5rem 1.5rem 1rem 1.5rem; 
   background: rgba(255, 255, 255, 0.85); 
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
-  transform: translate3d(0, 0, 0); 
   border-bottom: 1px solid var(--border-color);
 }
 
@@ -197,12 +203,11 @@ body.dark-mode .details-header {
   border: none;
   border-radius: var(--radius-btn);
   cursor: pointer;
-  padding: 8px 10px 8px 8px;
+  padding: 8px;
   color: var(--text-primary);
   font-weight: bold;
   transition: all 0.2s ease;
-  margin-right: 12px;
-  margin-left: 4px;
+  margin-right: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -215,38 +220,38 @@ body.dark-mode .details-header {
 .details-content {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  padding-bottom: 2rem;
+  gap: 15px;
+  padding-bottom: 1rem;
+  overflow-y: auto; /* Specifically allow site details to scroll if long */
 }
 
 .details-box {
   background: var(--bg-input); 
-  padding: 15px; 
+  padding: 12px; 
   border-radius: var(--radius-btn); 
   border: none;
 }
 
 /* =========================================================
-   4. SIDEBAR MAP
+   4. SIDEBAR MAP (SAFE BOUNDARIES)
 ========================================================= */
 .sidebar-map-wrapper {
-  flex: 1 1 auto;
+  flex: 1; /* Claims all remaining space dynamically */
   position: relative;
   display: flex;
   flex-direction: column;
-  margin-top: auto;
-  padding: 1rem;
-  border-bottom-left-radius: var(--radius-app);
+  padding: 1.5rem;
+  border-top: 1px solid var(--border-light); /* Adds a crisp line between sections */
+  background: var(--bg-card); /* Adds a subtle contrast */
   overflow: hidden;
 }
 
 .map-floating-header {
   position: absolute; 
-  top: 24px; 
-  left: 24px; 
-  right: 24px; 
+  top: 36px; /* Restored safe offset inside wrapper */
+  left: 36px; 
+  right: 36px; 
   z-index: 400; 
-  margin-top: 2rem;
   display: flex; 
   justify-content: space-between; 
   align-items: center; 
@@ -256,9 +261,9 @@ body.dark-mode .details-header {
 .floating-title {
   background: var(--bg-card);
   color: var(--text-primary);
-  padding: 8px 14px;
+  padding: 6px 12px;
   border-radius: var(--radius-btn);
-  font-size: 0.85rem;
+  font-size: 0.8rem;
   font-weight: bold;
   box-shadow: var(--shadow-soft);
   pointer-events: auto;
@@ -270,7 +275,7 @@ body.dark-mode .details-header {
   color: var(--text-primary);
   border: none;
   border-radius: var(--radius-btn);
-  padding: 8px 12px;
+  padding: 6px 10px;
   cursor: pointer;
   box-shadow: var(--shadow-soft);
   pointer-events: auto;
@@ -285,12 +290,11 @@ body.dark-mode .details-header {
 }
 
 .mini-map {
-  margin-top: 2rem;
   width: 100%; 
   height: 100%; 
   position: relative; 
   border-radius: var(--radius-card); 
-  border: none; 
+  border: 1px solid var(--border-light); 
   box-shadow: var(--shadow-soft); 
   overflow: hidden;
 }
@@ -430,12 +434,14 @@ body.dark-mode .active-row {
 }
 
 .status-badge {
-  padding: 6px 14px;
+  display: inline-block; /* THE FIX: Forces the browser to respect vertical padding */
+  padding: 5px 12px;
   border-radius: 20px;
   font-size: 0.75rem;
   font-weight: 700;
-  text-transform: capitalize;
+  text-transform: uppercase;
   letter-spacing: 0.5px;
+  line-height: 1.2;
 }
 
 .new { background: #e6f6ec; color: #0db15c; }
