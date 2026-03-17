@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import useDarkMode from '../../hooks/useDarkMode';
 import AnalyticsDashboard from '../../Dashboard/AnalyticsDashboard';
 import MapVisualizer from '../../Map/MapVisualizer';
@@ -19,6 +19,7 @@ import fileDark from '../../assets/fileDark.png';
 import fileLight from '../../assets/fileLight.png';
 
 import { useNavigate } from "react-router-dom";
+import { FixedSizeList as List } from 'react-window';
 
 import { parseLocationData, getShortRegionByProvince } from '../../utils/telecom';
 import { cityToProvinceMap } from '../MapDictionary/TelecomDictionaries';
@@ -27,19 +28,9 @@ import '../../styles/Dashboard_styles.css';
 import './SM_styles.css';
 
 const ICONS = {
-  checkDark,
-  checkLight,
-  verifiedDark,
-  verifiedLight,
-  glitterDark,
-  glitterLight,
-  removedDark,
-  removedLight,
-  warningDark,
-  warningLight,
-  search,
-  fileDark,
-  fileLight
+  checkDark, checkLight, verifiedDark, verifiedLight,
+  glitterDark, glitterLight, removedDark, removedLight,
+  warningDark, warningLight, search, fileDark, fileLight
 };
 
 export default function SMDashboard() {
@@ -59,6 +50,21 @@ export default function SMDashboard() {
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [selectedRowDetails, setSelectedRowDetails] = useState(null);
 
+  // --- AI AGENT STATES ---
+  const [aiCommand, setAiCommand] = useState("");
+  const [isAiLoading, setIsAiLoading] = useState(false);
+  const [showAiPanel, setShowAiPanel] = useState(false); 
+  
+  const [chatHistory, setChatHistory] = useState([
+    { sender: 'ai', text: "Hello Adrian! I'm your Globe RSC Copilot. You can say hi, or ask me to update site remarks and statuses." }
+  ]);
+  const chatEndRef = useRef(null);
+
+  // Auto-scroll chat to bottom
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatHistory, isAiLoading]);
+
   const currentLogo = isDarkMode ? globeLogoDark : globeLogoLight;
 
   const handleFileChange = (e, setFileState) => {
@@ -73,6 +79,100 @@ export default function SMDashboard() {
       reader.onerror = reject;
       reader.readAsText(file);
     });
+  };
+
+  // --- UPGRADED AI EXECUTION (LIGHTWEIGHT STRINGIFIED PAYLOAD & ARMOR) ---
+  const handleAiExecute = () => {
+    if (!aiCommand.trim()) return;
+    
+    const userMessage = aiCommand.trim();
+    setChatHistory(prev => [...prev, { sender: 'user', text: userMessage }]);
+    setAiCommand(""); 
+    setIsAiLoading(true);
+    
+    if (window.google && window.google.script) {
+      
+      // 🚀 THE DIET: Only send exact fields to reduce payload size
+      const lightweightData = results.map(r => ({
+        plaId: r.plaId,
+        matchStatus: r.matchStatus,
+        baseLocation: r.baseLocation,
+        nmsName: r.nmsName,
+        remarks: r.remarks
+      }));
+
+      // 🛡️ THE FIX: Convert the massive array into a single text string so Google doesn't drop it!
+      const dataString = JSON.stringify(lightweightData);
+
+      window.google.script.run
+        .withSuccessHandler((aiResponse) => {
+          setIsAiLoading(false);
+          
+          if (!aiResponse) {
+            setChatHistory(prev => [...prev, { sender: 'system', text: "⚠️ AI returned an empty response.", isError: true }]);
+            return;
+          }
+
+          // 1. Handle API/Script Errors
+          if (aiResponse.error) {
+            setChatHistory(prev => [...prev, { sender: 'ai', text: `⚠️ System Error: ${aiResponse.error}`, isError: true }]);
+            return;
+          }
+          
+          // 2. Add AI's conversational reply
+          if (aiResponse.reply) {
+            setChatHistory(prev => [...prev, { sender: 'ai', text: aiResponse.reply }]);
+          }
+
+          // 3. ARMOR: Strictly validate the mutations array before touching state
+          if (aiResponse.mutations && Array.isArray(aiResponse.mutations) && aiResponse.mutations.length > 0) {
+            try {
+              let actualChangesCount = 0;
+              
+              const updatedResults = results.map(row => {
+                const change = aiResponse.mutations.find(c => c && c.plaId === row.plaId);
+                
+                // ARMOR: Ensure both the change AND the 'updates' object actually exist
+                if (change && change.updates) {
+                  actualChangesCount++;
+                  
+                  // ARMOR: Provide safe fallbacks so undefined values don't crash the table
+                  const safeStatus = change.updates.matchStatus || row.matchStatus || 'UNCHANGED';
+                  const safeRemarks = change.updates.remarks ? `(AI) ${change.updates.remarks}` : row.remarks;
+                  
+                  return { 
+                    ...row, 
+                    ...change.updates, 
+                    matchStatus: safeStatus, 
+                    remarks: safeRemarks 
+                  };
+                }
+                return row; // Return the row untouched if the AI data is garbage
+              });
+              
+              // Only update React state if valid changes were found
+              if (actualChangesCount > 0) {
+                setResults(updatedResults);
+                setChatHistory(prev => [...prev, { sender: 'system', text: `✓ Successfully applied updates to ${actualChangesCount} rows.` }]);
+              }
+              
+            } catch (crashError) {
+              console.error("AI Mutation Crash Prevented:", crashError);
+              setChatHistory(prev => [...prev, { sender: 'system', text: `⚠️ AI sent corrupted data. Your table was protected.`, isError: true }]);
+            }
+          }
+        })
+        .withFailureHandler((err) => {
+          setIsAiLoading(false);
+          setChatHistory(prev => [...prev, { sender: 'ai', text: `⚠️ Connection Failed: ${err.message || err}`, isError: true }]);
+        })
+        .processAIAgentCommand(userMessage, dataString); // <-- Sending the stringified data here!
+    } else {
+      setTimeout(() => {
+        setIsAiLoading(false);
+        setChatHistory(prev => [...prev, { sender: 'ai', text: "I'm currently running in Local Mock mode since Google Apps Script is offline. 🔌" }]);
+      }, 1000);
+    }
   };
 
   const handleSpecificExport = async (exportCategory) => {
@@ -162,6 +262,7 @@ export default function SMDashboard() {
     setResults([]);
     setFilterStatus('ALL');
     setSelectedRowDetails(null);
+    setShowAiPanel(false); 
 
     try {
       const text1 = await readFileAsText(monitorFile1);
@@ -214,7 +315,6 @@ export default function SMDashboard() {
   const stats = useMemo(() => {
     const siteMap = new Map();
     results.forEach(r => {
-      // FIX: Use baseLocation as the true unique identifier for sites
       const key = r.baseLocation; 
       if (!siteMap.has(key)) siteMap.set(key, r.matchStatus);
     });
@@ -247,12 +347,10 @@ export default function SMDashboard() {
         const orderB = statusOrder.indexOf(b.matchStatus);
         if (orderA !== orderB) return orderA - orderB;
 
-        // Sort by baseLocation so physical sites stay grouped together
         const baseA = a.baseLocation || "";
         const baseB = b.baseLocation || "";
         const baseCompare = baseA.localeCompare(baseB, undefined, { numeric: true, sensitivity: 'base' });
         
-        // If same base location, sort by the specific tech name
         if (baseCompare === 0) return (a.nmsName || "").localeCompare(b.nmsName || "");
         return baseCompare;
       });
@@ -274,6 +372,74 @@ export default function SMDashboard() {
     setTimeout(() => {
       navigate(path);
     }, 1000); 
+  };
+
+  const VirtualizedRow = ({ index, style }) => {
+    const row = filteredResults[index];
+    const prevRow = filteredResults[index - 1];
+    const nextRow = filteredResults[index + 1];
+
+    const isExactRow = selectedSite?.nmsName === row.nmsName;
+    const isSameGroup = selectedSite?.baseLocation === row.baseLocation && !isExactRow;
+    const isFirstOfGroup = !prevRow || prevRow.baseLocation !== row.baseLocation;
+    const isLastOfGroup = !nextRow || nextRow.baseLocation !== row.baseLocation;
+
+    let rowStyle = {
+      ...style,
+      display: 'flex',
+      alignItems: 'center',
+      padding: '0 20px',
+      cursor: "pointer", 
+      transition: "background-color 0.2s",
+      borderBottom: isLastOfGroup ? "2px solid var(--border-color)" : "1px solid rgba(128,128,128,0.1)",
+      backgroundColor: isExactRow ? "rgba(0, 123, 255, 0.2)" : (isSameGroup ? "rgba(128, 128, 128, 0.15)" : "transparent"),
+      boxSizing: 'border-box',
+      fontSize: '0.85rem'
+    };
+
+    const columnStyle = {
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      paddingRight: '15px'
+    };
+
+    return (
+      <div 
+        style={rowStyle} 
+        className="row-hover"
+        onClick={() => {
+          const lat = parseFloat(row.lat);
+          const lng = parseFloat(row.lng);
+          setSelectedSite({ lat, lng, id: row.plaId, baseLocation: row.baseLocation, nmsName: row.nmsName, zoom: 18 });
+          setSelectedRowDetails(row);
+          if (showAiPanel) setShowAiPanel(false); 
+        }}
+      >
+        <div style={{ ...columnStyle, width: '10%', fontWeight: 'bold' }}>
+          {isFirstOfGroup ? (row.plaId === "NEW_SITE" ? "N/A" : row.plaId) : ""}
+        </div>
+        <div style={{ ...columnStyle, width: '10%' }}>
+          {isFirstOfGroup && (
+            <span className={`status-badge ${(row.matchStatus || 'UNCHANGED').toLowerCase()}`} style={{ fontSize: '0.7rem' }}>
+            {row.matchStatus || 'UNCHANGED'}
+          </span>
+          )}
+        </div>
+        <div style={{ ...columnStyle, width: '20%', fontWeight: '500' }}>
+          {isFirstOfGroup ? row.baseLocation : ""}
+        </div>
+        <div style={{ ...columnStyle, width: '10%', fontWeight: 'bold', color: row.techGen?.includes('5G') ? '#28a745' : (row.techGen?.includes('4G') ? '#007bff' : '#666') }}>
+          {row.techGen}
+        </div>
+        <div style={{ ...columnStyle, width: '25%', fontFamily: 'monospace', color: '#1a73e8', fontWeight: 'bold' }}>
+          {row.nmsName}
+        </div>
+        <div style={{ ...columnStyle, width: '25%', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+          {isFirstOfGroup ? row.remarks : ""}
+        </div>
+      </div>
+    );
   };
 
   const headerActions = (
@@ -333,8 +499,10 @@ export default function SMDashboard() {
       <main className="main-layout">
         <aside className="sidebar">
           <div className="sidebar-top-section">
-            <div className={`sidebar-carousel ${selectedRowDetails ? 'show-details' : ''}`}>
+            
+            <div className={`sidebar-carousel ${showAiPanel ? 'show-ai' : (selectedRowDetails ? 'show-details' : '')}`}>
               
+              {/* PANEL 1: DATA INPUT */}
               <div className="carousel-panel">
                 <h3 style={{ marginTop: 0, marginBottom: '20px', fontSize: '1.2rem' }}>Data Input</h3>
                 <div className="upload-group">
@@ -359,9 +527,12 @@ export default function SMDashboard() {
                 </button>
               </div>
 
+              {/* PANEL 2: SITE DETAILS */}
               <div className="carousel-panel">
                 <div className="details-header">
-                  <button className="back-btn" onClick={() => setSelectedRowDetails(null)}></button>
+                  <button className="back-btn" onClick={() => setSelectedRowDetails(null)} style={{ background: 'transparent', padding: '4px' }}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+                  </button>
                   <h3 style={{ margin: 0, fontSize: '1.2rem' }}>Site Details</h3>
                 </div>
                 
@@ -403,10 +574,73 @@ export default function SMDashboard() {
                   </div>
                 )}
               </div>
+
+              {/* PANEL 3: AI AGENT (FIXED LAYOUT - FULL HEIGHT) */}
+              <div className="carousel-panel" style={{ padding: 0, display: 'flex', flexDirection: 'column', height: '100%' }}>
+                
+                {/* Header */}
+                <div className="details-header" style={{ margin: 0, padding: '2rem 2rem 1rem 2rem', flexShrink: 0, borderBottom: 'none' }}>
+                  <button className="back-btn" onClick={() => setShowAiPanel(false)} style={{ background: 'transparent', padding: '8px 10px 8px 8px', marginLeft: '30px', marginRight: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="15 18 9 12 15 6"></polyline>
+                    </svg>
+                  </button>
+                  <h3 style={{ margin: 0, fontSize: '1.2rem' }}>veRiSynC AI</h3>
+                </div>
+                
+                {/* Body Area (Expands to fill space beautifully) */}
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '0 2rem 2rem 2rem', gap: '15px' }}>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.5', margin: 0 }}>
+                    Ask veRiSynC AI to verify sites, add remarks, or fix discrepancies across your current dataset.
+                  </p>
+                  
+                  <textarea 
+                    placeholder="e.g., 'Verify all sites in Panabo' or 'Add remark to MIN604 checking with field engineer'..." 
+                    value={aiCommand}
+                    onChange={(e) => setAiCommand(e.target.value)}
+                    onKeyDown={(e) => {
+                      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleAiExecute();
+                    }}
+                    style={{ 
+                      flex: 1, 
+                      width: '100%', 
+                      padding: '15px',
+                      borderRadius: '12px',
+                      background: 'var(--bg-input)', 
+                      border: '1px solid var(--border-color)', 
+                      color: 'var(--text-primary)',
+                      fontSize: '0.95rem',
+                      resize: 'none',
+                      fontFamily: 'inherit',
+                      boxSizing: 'border-box'
+                    }}
+                  />
+                  
+                  <button 
+                    onClick={handleAiExecute}
+                    disabled={isAiLoading || !aiCommand}
+                    className="btn primary-filled full-width"
+                    style={{ padding: '14px', display: 'flex', justifyContent: 'center', gap: '10px', alignItems: 'center', flexShrink: 0 }}
+                  >
+                    {isAiLoading ? "Thinking..." : (
+                      <>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <line x1="22" y1="2" x2="11" y2="13"></line>
+                          <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                        </svg>
+                        Execute Command
+                      </>
+                    )}
+                  </button>
+                </div>
+
+              </div>
+              
             </div>
           </div>
 
-          <div className="sidebar-map-wrapper">
+          {/* THE UI FIX: Hides the map conditionally so the AI panel can expand! */}
+          <div className="sidebar-map-wrapper" style={{ display: showAiPanel ? 'none' : 'flex' }}>
             <div className="map-floating-header">
               <span className="floating-title">Site Visualizer</span>
               <button className="floating-btn" onClick={() => setShowBigMap(true)} aria-label="Expand map">
@@ -425,6 +659,19 @@ export default function SMDashboard() {
         </aside>
 
         <section className="content-area">
+
+          {/* THE SLEEK SIDE TAB */}
+          <div 
+            className={`ai-side-tab ${showAiPanel ? 'active' : ''}`}
+            onClick={() => {
+              setShowAiPanel(!showAiPanel);
+              if (!showAiPanel) setSelectedRowDetails(null); 
+            }}
+          >
+            <span style={{ fontSize: '1rem', transform: 'rotate(90deg)' }}>{showAiPanel ? "✕" : "</>"}</span>
+            <span className="ai-tab-text">{showAiPanel ? "CLOSE" : "veRiSynC AI"}</span>
+          </div>
+
           <div className="output-card">
             <div className="dashboard-container">
               <AnalyticsDashboard data={results} activeFilter={filterStatus} onFilterChange={setFilterStatus} isDarkMode={isDarkMode} />
@@ -501,71 +748,39 @@ export default function SMDashboard() {
               />
             </div>
 
-            <div className="output-box">
+            <div className="output-box" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
               {results.length > 0 ? (
-                <div className="table-wrapper">
-                  <table className="result-table">
-                    <thead>
-                      <tr>
-                        <th>PLA_ID</th>
-                        <th>Status</th>
-                        <th>Base Name</th>
-                        <th style={{color: '#1a73e8'}}>Technology</th>
-                        <th style={{color: '#1a73e8'}}>BCF NAME</th>
-                        <th>Remarks</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredResults.map((row, i) => {
-                        // FIX: Group visually using baseLocation instead of plaId
-                        const isExactRow = selectedSite?.nmsName === row.nmsName;
-                        const isSameGroup = selectedSite?.baseLocation === row.baseLocation && !isExactRow;
-                        
-                        let rowStyle = { cursor: "pointer", transition: "background-color 0.2s" };
-                        if (isExactRow) rowStyle.backgroundColor = "rgba(0, 123, 255, 0.2)";
-                        else if (isSameGroup) rowStyle.backgroundColor = "rgba(128, 128, 128, 0.15)";
-
-                        const nextRow = filteredResults[i + 1];
-                        const isLastOfGroup = !nextRow || nextRow.baseLocation !== row.baseLocation;
-                        if (isLastOfGroup) rowStyle.borderBottom = "2px solid var(--border-color)";
-
-                        const prevRow = filteredResults[i - 1];
-                        const isFirstOfGroup = !prevRow || prevRow.baseLocation !== row.baseLocation;
-
-                        return (
-                          <tr key={`${row.baseLocation}-${row.nmsName}-${i}`} className="row-hover" style={rowStyle}
-                            onClick={() => {
-                              const lat = parseFloat(row.lat);
-                              const lng = parseFloat(row.lng);
-                              setSelectedSite({ lat, lng, id: row.plaId, baseLocation: row.baseLocation, nmsName: row.nmsName, zoom: 18 });
-                              setSelectedRowDetails(row);
-                            }}
-                          >
-                            <td className="font-bold">
-                              {isFirstOfGroup ? (row.plaId === "NEW_SITE" ? "N/A" : row.plaId) : ""}
-                            </td>
-                            <td>
-                              {isFirstOfGroup && (
-                                <span className={`status-badge ${row.matchStatus.toLowerCase()}`}>
-                                  {row.matchStatus}
-                                </span>
-                              )}
-                            </td>
-                            <td style={{ fontWeight: '500' }}>{isFirstOfGroup ? row.baseLocation : ""}</td>
-                            <td style={{ fontWeight: 'bold', color: row.techGen?.includes('5G') ? '#28a745' : (row.techGen?.includes('4G') ? '#007bff' : '#666') }}>
-                              {row.techGen}
-                            </td>
-                            <td style={{ fontFamily: 'monospace', color: '#1a73e8', fontWeight: 'bold' }}>
-                              {row.nmsName}
-                            </td>
-                            <td style={{ fontSize: '0.75rem', color: 'var(--text-secondary)'}}>
-                              {isFirstOfGroup ? row.remarks : ""}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                <div className="table-wrapper" style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                  
+                  <div style={{ 
+                    display: 'flex', 
+                    padding: '12px 20px', 
+                    fontWeight: 'bold', 
+                    borderBottom: '2px solid var(--border-color)', 
+                    backgroundColor: 'var(--bg-secondary)',
+                    textTransform: 'uppercase',
+                    fontSize: '0.8rem'
+                  }}>
+                    <div style={{ width: '10%' }}>PLA_ID</div>
+                    <div style={{ width: '10%' }}>Status</div>
+                    <div style={{ width: '20%' }}>Base Name</div>
+                    <div style={{ width: '10%', color: '#1a73e8' }}>Tech</div>
+                    <div style={{ width: '25%', color: '#1a73e8' }}>BCF NAME</div>
+                    <div style={{ width: '25%' }}>Remarks</div>
+                  </div>
+                  
+                  <div style={{ flex: 1, width: '100%' }}>
+                    <List
+                      height={500} 
+                      itemCount={filteredResults.length}
+                      itemSize={45}
+                      width={'100%'}
+                      overscanCount={10}
+                    >
+                      {VirtualizedRow}
+                    </List>
+                  </div>
+                  
                 </div>
               ) : (
                 <div className="placeholder-container">

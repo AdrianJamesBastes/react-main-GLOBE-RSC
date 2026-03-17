@@ -35,46 +35,66 @@
   box-shadow: 0 4px 20px rgba(0,0,0,0.07);
 }
 
-body.dark-mode .top-bar { box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+body.dark-mode .top-bar {
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+}
 
-.globe-logo { height: 70px !important; width: auto !important; display: block; }
-.main-layout { display: flex; flex: 1; overflow: hidden; }
+.globe-logo {
+  height: 70px !important;
+  width: auto !important;
+  display: block;
+}
+
+.main-layout {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
 
 /* =========================================================
    3. MODERN SLIDING SIDEBAR
 ========================================================= */
-/* floating‑glass sidebar */
 .sidebar {
   width: 320px;
   margin-left: 30px;
-  /* --- THE FIX: We brought the frosted glass back! --- */
   background: var(--bg-sidebar);
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
   box-shadow: 0 20px 60px rgba(0,0,0,0.15);
   border-radius: var(--radius-app);
-
   display: flex;
   flex-direction: column;
   padding: 0;
   overflow: hidden;
-
   border-right: 1px solid var(--border-light);
-
   flex-shrink: 0;
   z-index: 40;
   margin-top: 30px;
   margin-bottom: 30px;
 }
 
-.sidebar-top-section { flex: 1; overflow: hidden; position: relative; min-height: 380px; }
-.sidebar-carousel { display: flex; width: 200%; height: 100%; transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
-.sidebar-carousel.show-details { transform: translateX(-50%); }
+.sidebar-top-section {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  min-height: 380px;
+}
+
+/* 3 Panels now (Input, Details, AI) */
+.sidebar-carousel { 
+  display: flex; 
+  width: 300%; 
+  height: 100%; 
+  transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1); 
+}
+
+.sidebar-carousel.show-details { transform: translateX(-33.333%); }
+.sidebar-carousel.show-ai { transform: translateX(-66.666%); }
 
 .carousel-panel { 
-  width: 50%; 
+  width: 33.333%; 
   height: 100%; 
-  padding: 0 2rem 2rem 2rem; /* 0 top padding, 2rem on the sides and bottom */
+  padding: 0 2rem 2rem 2rem; 
   box-sizing: border-box; 
   display: flex; 
   flex-direction: column; 
@@ -82,17 +102,23 @@ body.dark-mode .top-bar { box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
   background-color: transparent; 
 }
 
-/* 2. Top Spacing: Pushes the first item (like the "Data Input" title) down so it doesn't hit the ceiling */
 .carousel-panel:not(:has(.details-header)) {
   padding-top: 2.5rem;
 }
 
-.upload-group { 
-  margin-bottom: 1.5rem; 
-  position: relative; 
+.upload-group {
+  margin-bottom: 1.5rem;
+  position: relative;
   z-index: 1;
 }
-.input-label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 8px; color: var(--text-secondary); }
+
+.input-label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+}
 
 .file-drop-area {
   display: flex; 
@@ -100,10 +126,8 @@ body.dark-mode .top-bar { box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
   align-items: center;
   gap: 30px;
   min-height: 50px;
-  
-  /* --- THE FIX: Ensure it captures hover correctly --- */
   position: relative;
-  background: var(--bg-input); /* Uses your glass input variable */
+  background: var(--bg-input); 
   border-radius: var(--radius-btn);
   padding: 5px 10px;
   border: 1px solid var(--border-light);
@@ -118,107 +142,149 @@ body.dark-mode .top-bar { box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
   box-shadow: var(--shadow-soft);
 }
 
-/* 4. Ensure the icon still animates */
 .file-drop-area:hover .upload-icon {
-  transform: translateY(-2px); /* Matches the box lift */
+  transform: translateY(-2px);
   opacity: 1;
 }
 
-body.dark-mode .file-drop-area:hover { background: rgba(139, 92, 246, 0.1); }
+body.dark-mode .file-drop-area:hover {
+  background: rgba(139, 92, 246, 0.1);
+}
+
 .file-msg {
   font-size: 0.85rem;
   font-weight: 500;
   color: var(--text-primary);
-  /* Truncate long names with dots (...) */
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 180px; 
   display: block;
 }
-.file-input { position: absolute; left: 0; top: 0; height: 100%; width: 100%; opacity: 0; cursor: pointer; }
+
+.file-input {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  width: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
 
 .details-header {
   display: flex; 
   align-items: center; 
   gap: 12px; 
-  
   position: sticky;
   top: 0;
   z-index: 100;
-  
-  /* Overrides the 2rem margin-top, and breaks out of the left/right panel padding */
   margin: 0 -2rem 1.5rem -2rem !important; 
-  
-  /* Internal padding to keep the Back Button and Text perfectly aligned */
   padding: 2rem 2rem 1rem 2rem; 
-  
-  /* Thicker Glass to hide the text scrolling underneath */
   background: rgba(255, 255, 255, 0.85); 
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
-  
-  /* Forces the browser's GPU to render the blur properly during scroll */
   transform: translate3d(0, 0, 0); 
-  
   border-bottom: 1px solid var(--border-color);
 }
 
-/* Dark mode thick glass */
 body.dark-mode .details-header {
   background: rgba(17, 28, 68, 0.95); 
 }
 
-.back-btn { background: var(--bg-input); border: none; border-radius: var(--radius-btn); cursor: pointer; padding: 8px 14px; color: var(--text-primary); font-weight: bold; transition: all 0.2s ease; }
-.back-btn:hover { background: var(--border-color); }
-
-.details-content { 
-  display: flex; 
-  flex-direction: column; 
-  gap: 20px; 
-  padding-bottom: 2rem; 
+.back-btn {
+  background: var(--bg-input);
+  border: none;
+  border-radius: var(--radius-btn);
+  cursor: pointer;
+  padding: 8px 10px 8px 8px;
+  color: var(--text-primary);
+  font-weight: bold;
+  transition: all 0.2s ease;
+  margin-right: 12px;
+  margin-left: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.details-box { background: var(--bg-input); 
+.back-btn:hover {
+  background: var(--border-color);
+}
+
+.details-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding-bottom: 2rem;
+}
+
+.details-box {
+  background: var(--bg-input); 
   padding: 15px; 
   border-radius: var(--radius-btn); 
-  border: none; }
-
-.text-danger { color: #f02849 !important; }
-.text-amber { color: #ff9800 !important; } 
+  border: none;
+}
 
 /* =========================================================
    4. SIDEBAR MAP
 ========================================================= */
 .sidebar-map-wrapper {
-  /* flexible wrapper: no hard height or weird margin functions */
   flex: 1 1 auto;
   position: relative;
   display: flex;
   flex-direction: column;
   margin-top: auto;
   padding: 1rem;
-  /* round only bottom-left so the panel corner matches */
   border-bottom-left-radius: var(--radius-app);
   overflow: hidden;
 }
 
-.map-floating-header { position: absolute; 
+.map-floating-header {
+  position: absolute; 
   top: 24px; 
   left: 24px; 
   right: 24px; 
   z-index: 400; 
-    margin-top: 2rem;
+  margin-top: 2rem;
   display: flex; 
   justify-content: space-between; 
   align-items: center; 
-  pointer-events: none; }
+  pointer-events: none;
+}
   
-.floating-title { background: var(--bg-card); color: var(--text-primary); padding: 8px 14px; border-radius: var(--radius-btn); font-size: 0.85rem; font-weight: bold; box-shadow: var(--shadow-soft); pointer-events: auto; border: none; }
-.floating-btn { background: var(--bg-card); color: var(--text-primary); border: none; border-radius: var(--radius-btn); padding: 8px 12px; cursor: pointer; box-shadow: var(--shadow-soft); pointer-events: auto; display: flex; align-items: center; justify-content: center; transition: background 0.2s; }
-.floating-btn:hover { background: var(--bg-hover); }
+.floating-title {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  padding: 8px 14px;
+  border-radius: var(--radius-btn);
+  font-size: 0.85rem;
+  font-weight: bold;
+  box-shadow: var(--shadow-soft);
+  pointer-events: auto;
+  border: none;
+}
 
-.mini-map { 
+.floating-btn {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: none;
+  border-radius: var(--radius-btn);
+  padding: 8px 12px;
+  cursor: pointer;
+  box-shadow: var(--shadow-soft);
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+}
+
+.floating-btn:hover {
+  background: var(--bg-hover);
+}
+
+.mini-map {
   margin-top: 2rem;
   width: 100%; 
   height: 100%; 
@@ -226,13 +292,14 @@ body.dark-mode .details-header {
   border-radius: var(--radius-card); 
   border: none; 
   box-shadow: var(--shadow-soft); 
-  overflow: hidden; }
+  overflow: hidden;
+}
 
-.leaflet-container { 
+.leaflet-container {
   height: 100% !important; 
-
   width: 100% !important; 
-  filter: var(--map-filter); }
+  filter: var(--map-filter);
+}
 
 /* =========================================================
    5. CONTENT AREA & OUTPUT
@@ -240,17 +307,15 @@ body.dark-mode .details-header {
 .content-area { 
   flex: 1; 
   padding: 2rem; 
-  
-  /* THE FIX: Remove the solid white background and margins! */
   background-color: transparent; 
   margin: 0; 
   border-radius: 0; 
   box-shadow: none;
   border: none;
-  
   overflow: hidden; 
   display: flex; 
   flex-direction: column;
+  position: relative; /* Anchor for the Side Tab */
 }
 
 .output-card { 
@@ -258,26 +323,59 @@ body.dark-mode .details-header {
   backdrop-filter: var(--glass-blur);
   border-radius: var(--radius-card); 
   box-shadow: var(--shadow-soft); 
-  height: 100%; display: flex; flex-direction: column; overflow: hidden; 
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden; 
   border: 1px solid var(--border-light); 
 }
 
-.search-bar { padding: 10px 20px; border: 1px solid transparent; background-color: var(--bg-input) !important; color: var(--text-primary); border-radius: 20px; font-size: 0.9rem; width: 250px; outline: none; transition: all 0.2s; }
-.search-bar:focus { border-color: var(--brand-purple); box-shadow: 0 0 0 3px rgba(112, 51, 255, 0.15); }
+.search-bar {
+  padding: 10px 20px;
+  border: 1px solid transparent;
+  background-color: var(--bg-input) !important;
+  color: var(--text-primary);
+  border-radius: 20px;
+  font-size: 0.9rem;
+  width: 250px;
+  outline: none;
+  transition: all 0.2s;
+}
+
+.search-bar:focus {
+  border-color: var(--brand-purple);
+  box-shadow: 0 0 0 3px rgba(112, 51, 255, 0.15);
+}
 
 /* =========================================================
    6. TABLE TOOLBAR & GRID
 ========================================================= */
-.table-toolbar { display: flex; justify-content: space-between; align-items: center; padding: 1.5rem 2rem; background-color: transparent; }
-.table-label { font-weight: 700; color: var(--text-primary); font-size: 1rem; letter-spacing: 0.5px; }
+.table-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.5rem 2rem;
+  background-color: transparent;
+}
 
-.output-box { display: block !important; flex: 1; overflow: hidden; position: relative; }
-.table-wrapper { width: 100%; height: 100%; overflow: auto; background-color: transparent; } /* Made transparent to let glass bleed through */
+.output-box {
+  display: block !important;
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
 
-.result-table { 
-  width: 100% !important; 
-  border-collapse: collapse !important; 
-  border: none !important; 
+.table-wrapper {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  background-color: transparent;
+}
+
+.result-table {
+  width: 100% !important;
+  border-collapse: collapse !important;
+  border: none !important;
 }
 
 .result-table th {
@@ -289,189 +387,305 @@ body.dark-mode .details-header {
   font-size: 0.85rem;
   font-weight: 600;
   color: var(--text-secondary);
-  
-  /* --- 1. THE FIX: Thicker white gradient to block scrolling text --- */
-  background: linear-gradient(
-    180deg, 
-    rgba(255, 255, 255, 0.95) 0%,   /* Almost solid at the top */
-    rgba(255, 255, 255, 0.75) 100%  /* Frosted at the bottom */
-  );
-  
-  /* --- 2. THE DEEP FROST --- */
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.75) 100%);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
-  
-  /* --- 3. THE BEVEL --- */
   border: none;
   border-top: 1px solid rgba(255, 255, 255, 0.8);
   border-bottom: 1px solid rgba(255, 255, 255, 0.4);
-  
-  /* --- 4. THE 3D THICKNESS --- */
-  box-shadow: 
-    inset 0 1px 1px rgba(255, 255, 255, 0.9), 
-    0 8px 20px rgba(31, 38, 135, 0.05); 
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.9), 0 8px 20px rgba(31, 38, 135, 0.05); 
 }
+
 body.dark-mode .result-table th {
-  /* Matching thicker dark glass */
-  background: linear-gradient(
-    180deg, 
-    rgba(17, 28, 68, 0.95) 0%, 
-    rgba(17, 28, 68, 0.85) 100%
-  );
+  background: linear-gradient(180deg, rgba(17, 28, 68, 0.95) 0%, rgba(17, 28, 68, 0.85) 100%);
   border-top: 1px solid rgba(255, 255, 255, 0.2);
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  box-shadow: 
-    inset 0 1px 1px rgba(255, 255, 255, 0.1), 
-    0 8px 20px rgba(0, 0, 0, 0.4);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.1), 0 8px 20px rgba(0, 0, 0, 0.4);
   color: #a3aed1; 
 }
 
-.result-table td { padding: 16px 20px; border: none; border-bottom: 1px solid var(--border-color); font-size: 0.9rem; color: var(--text-primary); white-space: nowrap; }
+.result-table td {
+  padding: 16px 20px;
+  border: none;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
 
-.row-hover:hover { background-color: var(--bg-hover) !important; cursor: pointer; }
-.active-row { background-color: var(--bg-active) !important; color: var(--brand-purple) !important; outline: none; border-left: 4px solid var(--brand-purple); }
-body.dark-mode .active-row { color: white !important; }
+.row-hover:hover {
+  background-color: var(--bg-hover) !important;
+  cursor: pointer;
+}
 
-.font-bold { font-weight: 600; color: var(--text-primary); }
-.coord-text { font-family: 'Courier New', monospace; color: var(--text-secondary); }
+.active-row {
+  background-color: var(--bg-active) !important;
+  color: var(--brand-purple) !important;
+  outline: none;
+  border-left: 4px solid var(--brand-purple);
+}
 
-.status-badge { padding: 6px 14px; border-radius: 20px; font-size: 0.75rem; font-weight: 700; text-transform: capitalize; letter-spacing: 0.5px; }
+body.dark-mode .active-row {
+  color: white !important;
+}
+
+.status-badge {
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: capitalize;
+  letter-spacing: 0.5px;
+}
+
 .new { background: #e6f6ec; color: #0db15c; }
 .removed { background: #fde8e8; color: #f02849; }
 .mismatch { background: #fff4de; color: #ff9800; }
 .unchanged { background: var(--bg-input); color: var(--text-secondary); }
 
-.placeholder-container { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-secondary); font-size: 1.1rem; }
-
-/* =========================================================
-   7. GLOBAL BUTTONS
-========================================================= */
-.theme-toggle { background-color: transparent; border: 1px solid var(--border-color); color: var(--text-primary); font-size: 0.9rem; display: flex; align-items: center; gap: 6px; border-radius: var(--radius-btn); padding: 10px 16px; cursor: pointer; }
-.theme-toggle:hover { background-color: var(--bg-hover); border-color: var(--brand-purple); }
-
-.btn { 
-  padding: 10px 20px; 
-  border-radius: var(--radius-btn); 
-  font-weight: 600; 
-  cursor: pointer; 
-  transition: all 0.2s ease; 
-  border: none; 
+.placeholder-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-secondary);
+  font-size: 1.1rem;
 }
 
-/* --- SCAN BUTTON ICON ALIGNMENT --- */
+/* =========================================================
+   7. GLOBAL BUTTONS & SLEEK AI SIDE TAB
+========================================================= */
+.theme-toggle {
+  background-color: transparent;
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--radius-btn);
+  padding: 10px 16px;
+  cursor: pointer;
+}
+
+.theme-toggle:hover {
+  background-color: var(--bg-hover);
+  border-color: var(--brand-purple);
+}
+
+.btn {
+  padding: 10px 20px;
+  border-radius: var(--radius-btn);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: none;
+}
+
 .scan-btn {
   display: flex;
-
   justify-content: center;
-  gap: 10px; /* Space between icon and text */
+  gap: 10px;
 }
 
 .btn-icon {
-  width: 18px;  /* Sleek, professional size */
+  width: 18px;
   height: 18px;
   object-fit: contain;
-  /* Optional: if your search.png is black, this makes it white to match the text */
-  filter: brightness(0) invert(1); 
+  filter: brightness(0) invert(1);
 }
 
-/* Optional: Slight pulse or scale effect on hover */
 .scan-btn:hover .btn-icon {
   transform: scale(1.1);
   transition: transform 0.2s ease;
 }
 
-.primary-filled { background: var(--brand-gradient); color: white; box-shadow: 0 4px 15px rgba(112, 51, 255, 0.3); }
-.primary-filled:hover { box-shadow: 0 6px 20px rgba(112, 51, 255, 0.4); transform: translateY(-1px); }
-.primary-filled:disabled { background: var(--text-secondary); box-shadow: none; transform: none; cursor: not-allowed; }
+.primary-filled {
+  background: var(--brand-gradient);
+  color: white;
+  box-shadow: 0 4px 15px rgba(112, 51, 255, 0.3);
+}
 
-.primary-outline { border: 2px solid var(--border-color); background: transparent; color: var(--text-primary); }
-.primary-outline:hover { border-color: var(--brand-purple); color: var(--brand-purple); }
-.full-width { width: 100%; }
+.primary-filled:hover {
+  box-shadow: 0 6px 20px rgba(112, 51, 255, 0.4);
+  transform: translateY(-1px);
+}
 
-.export-dropdown-container { position: relative; display: inline-block; outline: none; }
-.export-menu { position: absolute; top: 100%; right: 0; margin-top: 10px; background-color: var(--bg-card); border: none; border-radius: var(--radius-btn); box-shadow: var(--shadow-hover); display: flex; flex-direction: column; min-width: 180px; z-index: 1000; overflow: hidden; backdrop-filter: var(--glass-blur); }
-.export-menu button { background: transparent; border: none; border-bottom: 1px solid var(--border-color); padding: 14px 18px; text-align: left; color: var(--text-primary); font-size: 0.85rem; font-weight: 500; cursor: pointer; transition: background-color 0.2s; font-family: inherit; }
-.export-menu button:last-child { border-bottom: none; }
-.export-menu button:hover { background-color: var(--bg-hover); color: var(--brand-purple); padding-left: 22px; }
+.primary-filled:disabled {
+  background: var(--text-secondary);
+  box-shadow: none;
+  transform: none;
+  cursor: not-allowed;
+}
+
+.primary-outline {
+  border: 2px solid var(--border-color);
+  background: transparent;
+  color: var(--text-primary);
+}
+
+.primary-outline:hover {
+  border-color: var(--brand-purple);
+  color: var(--brand-purple);
+}
+
+.full-width {
+  width: 100%;
+}
+
+.export-dropdown-container {
+  position: relative;
+  display: inline-block;
+  outline: none;
+}
+
+.export-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 10px;
+  background-color: var(--bg-card);
+  border: none;
+  border-radius: var(--radius-btn);
+  box-shadow: var(--shadow-hover);
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  z-index: 1000;
+  overflow: hidden;
+  backdrop-filter: var(--glass-blur);
+}
+
+.export-menu button {
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border-color);
+  padding: 14px 18px;
+  text-align: left;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  font-family: inherit;
+}
+
+.export-menu button:last-child {
+  border-bottom: none;
+}
+
+.export-menu button:hover {
+  background-color: var(--bg-hover);
+  color: var(--brand-purple);
+  padding-left: 22px;
+}
+
+/* --- THE NEW SLEEK SIDE TAB --- */
+.ai-side-tab {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--brand-gradient);
+  color: white;
+  padding: 20px 1px;
+  border-radius: 16px 0 0 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  z-index: 500;
+  box-shadow: -4px 0 20px rgba(112, 51, 255, 0.3);
+  border: 1px solid rgba(255,255,255,0.2);
+  border-right: none;
+  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+.ai-side-tab:hover {
+  padding-right: 14px;
+  background: #8b5cf6;
+  box-shadow: -6px 0 25px rgba(112, 51, 255, 0.4);
+}
+
+.ai-side-tab.active {
+  background: #f02849;
+  box-shadow: -4px 0 20px rgba(240, 40, 73, 0.3);
+}
+
+.ai-tab-text {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  transform: rotate(180deg);
+  font-weight: 700;
+  letter-spacing: 2px;
+  font-size: 0.85rem;
+}
 
 /* =========================================================
    8. DASHBOARD PANELS & MODALS
 ========================================================= */
-.dashboard-container { display: flex; gap: 1.5rem; padding: 2rem 2rem 1rem 2rem; background-color: transparent; border-bottom: none; align-items: stretch; flex-shrink: 0; }
+.dashboard-container {
+  display: flex;
+  gap: 1.5rem;
+  padding: 2rem 2rem 1rem 2rem;
+  background-color: transparent;
+  border-bottom: none;
+  align-items: stretch;
+  flex-shrink: 0;
+}
 
 .chart-section { 
-  flex: 0 0 250px; 
-  border-radius: var(--radius-card); 
-  display: flex; 
-  flex-direction: column; 
-  align-items: center; 
-  justify-content: center; 
+  flex: 0 0 250px;
+  border-radius: var(--radius-card);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   padding: 1rem; 
-  
-  /* --- The same crystal-clear glass base --- */
-  background: linear-gradient(
-    135deg, 
-    rgba(255, 255, 255, 0.15) 0%, 
-    rgba(255, 255, 255, 0.0) 100%
-  );
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.15) 0%, rgba(255, 255, 255, 0.0) 100%);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  
-  /* --- The same 3D bevel and reflection --- */
   border-top: 1px solid rgba(255, 255, 255, 0.4);
   border-left: 1px solid rgba(255, 255, 255, 0.2);
   border-right: 1px solid rgba(255, 255, 255, 0.05);
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  
-  box-shadow: 
-    inset 1px 1px 1px rgba(255, 255, 255, 0.3), 
-    0 10px 30px rgba(31, 38, 135, 0.05);
+  box-shadow: inset 1px 1px 1px rgba(255, 255, 255, 0.3), 0 10px 30px rgba(31, 38, 135, 0.05);
 }
 
 body.dark-mode .chart-section {
-  background: linear-gradient(
-    135deg, 
-    rgba(255, 255, 255, 0.12) 0%, 
-    rgba(255, 255, 255, 0.02) 100%
-  );
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.02) 100%);
   border-top: 1px solid rgba(255, 255, 255, 0.25);
   border-left: 1px solid rgba(255, 255, 255, 0.15);
   border-right: 1px solid rgba(255, 255, 255, 0.02);
   border-bottom: 1px solid rgba(255, 255, 255, 0.02);
-  
-  box-shadow: 
-    inset 1px 1px 2px rgba(255, 255, 255, 0.15), 
-    0 15px 40px rgba(0, 0, 0, 0.6);
+  box-shadow: inset 1px 1px 2px rgba(255, 255, 255, 0.15), 0 15px 40px rgba(0, 0, 0, 0.6);
 }
 
-.chart-title { margin: 0; font-size: 0.85rem; color: var(--text-secondary); text-transform: uppercase; font-weight: 600; margin-bottom: 10px; }
+.chart-title {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
 
-/* THE FLEX: Responsive grid instead of strict 5 columns */
-.cards-section { 
-  flex: 1; 
-  display: grid; 
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); 
-  gap: 1.5rem; 
+.cards-section {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1.5rem;
 }
 
 .stat-card.active {
   transform: translateY(-6px);
-  background: linear-gradient(
-    135deg, 
-    rgba(255, 255, 255, 0.25) 0%, 
-    rgba(255, 255, 255, 0.05) 100%
-  );
-  box-shadow: 
-    inset 1px 1px 2px rgba(255, 255, 255, 0.6),
-    0 15px 35px rgba(0, 0, 0, 0.15);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.25) 0%, rgba(255, 255, 255, 0.05) 100%);
+  box-shadow: inset 1px 1px 2px rgba(255, 255, 255, 0.6), 0 15px 35px rgba(0, 0, 0, 0.15);
 }
 
 body.dark-mode .stat-card.active {
-  background: linear-gradient(
-    135deg, 
-    rgba(255, 255, 255, 0.15) 0%, 
-    rgba(255, 255, 255, 0.05) 100%
-  );
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.15) 0%, rgba(255, 255, 255, 0.05) 100%);
 }
 
 .stat-card.new.active { border-bottom: 4px solid #0db15c; box-shadow: 0 12px 20px -10px rgba(13, 177, 92, 0.6); }
@@ -481,169 +695,152 @@ body.dark-mode .stat-card.active {
 .stat-card.total.active { border-bottom: 4px solid var(--brand-purple); box-shadow: 0 12px 20px -10px rgba(112, 51, 255, 0.6); }
 
 .stat-card {
-  position: relative; 
+  position: relative;
   overflow: hidden;
-  border-radius: var(--radius-card); 
-  display: flex; 
-  flex-direction: column; 
-  align-items: center; 
-  justify-content: center; 
+  border-radius: var(--radius-card);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   padding: 1.5rem 1rem; 
-  
-  /* --- 1. THE SHINE: Light hitting the top-left corner --- */
-  background: linear-gradient(
-    135deg, 
-    rgba(255, 255, 255, 0.45) 0%, 
-    rgba(255, 255, 255, 0.05) 100%
-  );
-  
-  /* --- 2. THE FROST: Deep blur --- */
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.45) 0%, rgba(255, 255, 255, 0.05) 100%);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
-  
-  /* --- 3. THE BEVEL: Light catches the top/left edges --- */
   border-top: 1px solid rgba(255, 255, 255, 0.7);
   border-left: 1px solid rgba(255, 255, 255, 0.5);
   border-right: 1px solid rgba(255, 255, 255, 0.1);
-  border-bottom: 4px solid transparent; /* Reserved for your color accents */
-  
-  /* --- 4. THE THICKNESS: Inner rim reflection + outer drop shadow --- */
-  box-shadow: 
-    inset 1px 1px 2px rgba(255, 255, 255, 0.6), /* Gives it physical thickness */
-    0 10px 30px rgba(31, 38, 135, 0.1); /* Lifts it off the background */
-
-  transition: all 0.4s cubic-bezier(0.25, 0.8, 0.25, 1); /* Super buttery hover */
+  border-bottom: 4px solid transparent; 
+  box-shadow: inset 1px 1px 2px rgba(255, 255, 255, 0.6), 0 10px 30px rgba(31, 38, 135, 0.1); 
+  transition: all 0.4s cubic-bezier(0.25, 0.8, 0.25, 1); 
 }
 
 body.dark-mode .stat-card {
-  /* Darker gradient to match the night theme, but still shiny */
-  background: linear-gradient(
-    135deg, 
-    rgba(255, 255, 255, 0.12) 0%, 
-    rgba(255, 255, 255, 0.02) 100%
-  );
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.02) 100%);
   border-top: 1px solid rgba(255, 255, 255, 0.25);
   border-left: 1px solid rgba(255, 255, 255, 0.15);
   border-right: 1px solid rgba(255, 255, 255, 0.02);
-  
-  box-shadow: 
-    inset 1px 1px 2px rgba(255, 255, 255, 0.15), 
-    0 15px 40px rgba(0, 0, 0, 0.6); /* Deep shadow for dark mode depth */
+  box-shadow: inset 1px 1px 2px rgba(255, 255, 255, 0.15), 0 15px 40px rgba(0, 0, 0, 0.6); 
 }
 
-/* Hover Interaction: Lift and Glow */
-.stat-card:hover { 
-  transform: translateY(-6px); 
-  box-shadow: 
-    inset 1px 1px 3px rgba(255, 255, 255, 0.8), 
-    0 15px 40px rgba(112, 51, 255, 0.15); /* Adds a subtle purple glow on hover */
+.stat-card:hover {
+  transform: translateY(-6px);
+  box-shadow: inset 1px 1px 3px rgba(255, 255, 255, 0.8), 0 15px 40px rgba(112, 51, 255, 0.15);
 }
 
-/* Icon Icon Style (matching yourdesign) */
 .stat-icon {
   position: absolute;
   top: 15px;
   right: 15px;
-  width: 24px; 
+  width: 24px;
   height: 24px;
-  opacity: 0.6; /* Subtle look that fits the glass theme */
+  opacity: 0.6;
   transition: all 0.3s ease;
 }
 
-/* Icon Hover effect */
 .stat-card:hover .stat-icon {
   transform: scale(1.15) rotate(5deg);
   opacity: 1;
 }
 
-/* Stat Text Styles */
-.stat-label { font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); text-transform: capitalize; margin-bottom: 0.5rem; text-align: center; }
-.stat-value { font-size: 1.8rem; font-weight: 700; color: var(--text-primary); }
+.stat-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: capitalize;
+  margin-bottom: 0.5rem;
+  text-align: center;
+}
 
-/* Accent Colors (matching your provided JSX) */
+.stat-value {
+  font-size: 1.8rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
 .stat-card.new { border-bottom-color: #0db15c; }
 .stat-card.unchanged { border-bottom-color: #46aa27; }
 .stat-card.removed { border-bottom-color: #f02849; }
 .stat-card.mismatch { border-bottom-color: #ff8b07; }
 .stat-card.total { border-bottom-color: var(--brand-purple); }
 
-/* Premium Glass Morphism - Senior Developer Edition */
 .luxury-glass {
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.03) 100%);
   backdrop-filter: blur(32px) saturate(180%);
   -webkit-backdrop-filter: blur(32px) saturate(180%);
   border: 1.5px solid rgba(255, 255, 255, 0.15);
-  box-shadow: 
-    inset 0 1px 1px rgba(255, 255, 255, 0.2),
-    0 20px 40px rgba(0, 0, 0, 0.08);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.2), 0 20px 40px rgba(0, 0, 0, 0.08);
   transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1);
-  transform: translateZ(0); /* Hardware acceleration */
+  transform: translateZ(0); 
 }
 
 .luxury-glass:hover {
   transform: translateY(-8px) scale(1.02);
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.18) 0%, rgba(255, 255, 255, 0.05) 100%);
-  box-shadow: 
-    inset 0 1px 1px rgba(255, 255, 255, 0.3),
-    0 30px 60px rgba(0, 0, 0, 0.12);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.3), 0 30px 60px rgba(0, 0, 0, 0.12);
 }
 
-.stat-card.active {
-  transform: translateY(-10px) scale(1.02);
-  background: linear-gradient(
-    135deg, 
-    rgba(255, 255, 255, 0.25) 0%, 
-    rgba(255, 255, 255, 0.05) 100%
-  );
-  box-shadow: 
-    inset 0 1px 1px rgba(255, 255, 255, 0.6),
-    0 15px 35px rgba(0, 0, 0, 0.15);
+.map-modal-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background-color: var(--overlay-bg);
+  backdrop-filter: blur(5px);
+  z-index: 9999;
+  display: flex;
+  justify-content: center;
+  align-items: center;
 }
 
-body.dark-mode .stat-card.active {
-  background: linear-gradient(
-    135deg, 
-    rgba(255, 255, 255, 0.15) 0%, 
-    rgba(255, 255, 255, 0.05) 100%
-  );
+.map-modal-content {
+  background: var(--bg-card);
+  width: 85%;
+  height: 85%;
+  border-radius: var(--radius-app);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: var(--shadow-hover);
+  border: 1px solid var(--border-light);
 }
 
-.stat-card.new.active { border-bottom: 4px solid #0db15c; box-shadow: 0 12px 20px -10px rgba(13, 177, 92, 0.6), 0 20px 40px rgba(0, 0, 0, 0.1); }
-.stat-card.unchanged.active { border-bottom: 4px solid #46aa27; box-shadow: 0 12px 20px -10px rgba(70, 170, 39, 0.6), 0 20px 40px rgba(0, 0, 0, 0.1); }
-.stat-card.removed.active { border-bottom: 4px solid #f02849; box-shadow: 0 12px 20px -10px rgba(240, 40, 73, 0.6), 0 20px 40px rgba(0, 0, 0, 0.1); }
-.stat-card.mismatch.active { border-bottom: 4px solid #ff8b07; box-shadow: 0 12px 20px -10px rgba(255, 139, 7, 0.6), 0 20px 40px rgba(0, 0, 0, 0.1); }
-.stat-card.total.active { border-bottom: 4px solid var(--brand-purple); box-shadow: 0 12px 20px -10px rgba(112, 51, 255, 0.6), 0 20px 40px rgba(0, 0, 0, 0.1); }
-
-/* Modals */
-.map-modal-overlay { 
-  position: absolute; /* Changed from fixed to absolute to respect the glass container */
-  inset: 0; /* This forces it to stretch perfectly to all 4 corners */
-  width: 100%; 
-  height: 100%; 
-  background-color: var(--overlay-bg); 
-  backdrop-filter: blur(5px); 
-  z-index: 9999; 
-  display: flex; 
-  justify-content: center; 
-  align-items: center; 
+.map-modal-header {
+  padding: 1.5rem 2rem;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
-.map-modal-content { 
-  background: var(--bg-card); 
-  width: 85%; /* Changed from 85vw to 85% */
-  height: 85%; /* Changed from 85vh to 85% */
-  border-radius: var(--radius-app); 
-  display: flex; 
-  flex-direction: column; 
-  overflow: hidden; 
-  box-shadow: var(--shadow-hover); 
-  border: 1px solid var(--border-light); 
+.map-modal-header h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 1.2rem;
 }
-.map-modal-header { padding: 1.5rem 2rem; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; }
-.map-modal-header h3 { margin: 0; color: var(--text-primary); font-size: 1.2rem; }
-.close-btn { background: #fde8e8; color: #f02849; border: none; padding: 10px 20px; border-radius: var(--radius-btn); cursor: pointer; font-weight: bold; transition: all 0.2s; }
-.close-btn:hover { background: #f02849; color: white; }
-.big-map-wrapper { flex: 1; width: 100%; height: 100%; position: relative;overflow: hidden; }
+
+.close-btn {
+  background: #fde8e8;
+  color: #f02849;
+  border: none;
+  padding: 10px 20px;
+  border-radius: var(--radius-btn);
+  cursor: pointer;
+  font-weight: bold;
+  transition: all 0.2s;
+}
+
+.close-btn:hover {
+  background: #f02849;
+  color: white;
+}
+
+.big-map-wrapper {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+}
 
 .preview-toggle-btn {
   background: rgba(255, 255, 255, 0.15);
@@ -715,12 +912,66 @@ body.dark-mode .preview-menu {
 /* =========================================================
    9. LOADING OVERLAY
 ========================================================= */
-.loading-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background-color: var(--bg-app); opacity: 0.95; backdrop-filter: blur(10px); z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-.spinner-box { position: relative; width: 120px; height: 120px; display: flex; justify-content: center; align-items: center; }
-.loading-logo { width: 60px; height: auto; z-index: 2; animation: logo-pulse 2s infinite ease-in-out; }
-.spinner-ring { position: absolute; width: 100%; height: 100%; border-radius: 50%; border: 4px solid transparent; border-top-color: var(--brand-purple); border-right-color: #8ca6fb; animation: spin 1s linear infinite; }
-.spinner-ripple { position: absolute; width: 100%; height: 100%; border-radius: 50%; border: 2px solid rgba(112, 51, 255, 0.2); animation: ripple 1.5s linear infinite; }
-.loading-text { margin-top: 2rem; color: var(--text-primary); font-weight: 600; font-size: 1.2rem; letter-spacing: 0.5px; animation: fadeText 2s infinite; }
+.loading-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: var(--bg-app);
+  opacity: 0.95;
+  backdrop-filter: blur(10px);
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.spinner-box {
+  position: relative;
+  width: 120px;
+  height: 120px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.loading-logo {
+  width: 60px;
+  height: auto;
+  z-index: 2;
+  animation: logo-pulse 2s infinite ease-in-out;
+}
+
+.spinner-ring {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  border: 4px solid transparent;
+  border-top-color: var(--brand-purple);
+  border-right-color: #8ca6fb;
+  animation: spin 1s linear infinite;
+}
+
+.spinner-ripple {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  border: 2px solid rgba(112, 51, 255, 0.2);
+  animation: ripple 1.5s linear infinite;
+}
+
+.loading-text {
+  margin-top: 2rem;
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 1.2rem;
+  letter-spacing: 0.5px;
+  animation: fadeText 2s infinite;
+}
 
 @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 @keyframes logo-pulse { 0%, 100% { transform: scale(0.9); opacity: 0.8; } 50% { transform: scale(1.05); opacity: 1; } }
