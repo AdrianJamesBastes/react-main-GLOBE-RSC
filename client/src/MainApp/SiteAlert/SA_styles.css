@@ -1,6 +1,4 @@
-@import "../../styles/variables.css";
-/* bring in the shared storm‑masterlist rules so both dashboards stay in sync */
-@import "../StormMasterList/SM_styles.css";
+@import "../../styles/global_styles.css";
 
 /* container used by App.jsx when rendering the Site Alert page */
 .sadashboard{
@@ -17,4 +15,149 @@
     margin-top: 1.5rem;
     /* remove any accidental huge bottom margin from previous edits */
     margin-bottom: 0;
+    /* Match StormMasterList scan button style */
+    display: flex;
+    justify-content: center;
+    gap: 10px;
 }
+
+.btn-icon {
+    width: 18px;
+    height: 18px;
+    object-fit: contain;
+    filter: brightness(0) invert(1);
+}
+
+.scan-btn:hover .btn-icon {
+    transform: scale(1.1);
+    transition: transform 0.2s ease;
+}
+
+.primary-filled {
+    background: linear-gradient(135deg, rgba(112, 51, 255, 0.8) 0%, rgba(138, 92, 246, 0.8) 100%), rgba(255, 255, 255, 0.1);
+    color: white;
+    box-shadow: 0 4px 15px rgba(112, 51, 255, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.primary-filled:hover {
+    box-shadow: 0 6px 20px rgba(112, 51, 255, 0.4);
+    transform: translateY(-1px);
+}
+
+body.dark-mode .primary-filled:disabled {
+    background: rgba(0, 0, 0, 0.1);
+    box-shadow: none;
+    transform: none;
+    cursor: not-allowed;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.primary-outline {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-primary);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.primary-outline:hover {
+    border-color: var(--brand-purple);
+    color: var(--brand-purple);
+}
+
+body.dark-mode .btn {
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: var(--text-primary);
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+}
+
+.full-width {
+    width: 100%;
+}
+
+/* Make header buttons consistent width */
+.header-actions .btn {
+    min-width: 120px;
+}
+
+
+.file-input {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    cursor: pointer;
+}
+
+.file-drop-area {
+  /* existing styles */
+    border: 10px dashed #000000 !important;
+}
+
+/* Sidebar Toggle Button */
+.sidebar-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background-color 0.2s ease;
+  outline: none;
+}
+
+.sidebar-toggle-btn:hover {
+  background: var(--bg-hover);
+}
+
+.sidebar-toggle-btn:focus {
+  box-shadow: 0 0 0 2px rgba(66, 153, 225, 0.5);
+}
+
+.sidebar-toggle-btn svg {
+  transition: transform 0.3s ease;
+}
+
+.sidebar-toggle-btn svg.rotated {
+  transform: rotate(180deg);
+}
+
+/* Override StormMasterList's .content-area for SiteAlert only */
+.sadashboard .content-area {
+  margin-left: 0;
+  margin-right: 0;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.sadashboard .output-card {
+  width: 100%;
+  box-sizing: border-box;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.sadashboard .main-layout {
+  padding-left: 30px;
+  padding-right: 30px;
+}
+
+/* Ensure the data-input-section stretches children */
+.data-input-section {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  padding: 1.5rem 1.5rem 1.5rem 1.5rem;
+  box-sizing: border-box;
+}
+
+.data-input-section .full-width {
+  width: 100%;
+  align-self: stretch;
+}
+

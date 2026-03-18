@@ -55,7 +55,7 @@ export default function SMDashboard() {
   const [showAiPanel, setShowAiPanel] = useState(false); 
   
   const [chatHistory, setChatHistory] = useState([
-    { sender: 'ai', text: "Hello Adrian! I'm your veRiSynC AI Copilot. You can say hi, or ask me to update site remarks and statuses." }
+    { sender: 'ai', text: "Hello Adrian! I'm your veRiSynC AI Copilot. Ask me to list sites or update remarks!" }
   ]);
   
   const chatContainerRef = useRef(null);
@@ -89,7 +89,6 @@ export default function SMDashboard() {
     });
   };
 
- // --- UPGRADED AI EXECUTION (ADVANCED SNIPER FILTER) ---
   const handleAiExecute = () => {
     if (!aiCommand.trim()) return;
     
@@ -100,19 +99,12 @@ export default function SMDashboard() {
     
     if (window.google && window.google.script) {
       
-      // 🚀 THE FIX: Expanded Ignore List to block conversational words!
       const ignoreWords = [
-        // Actions
         "CHANGE", "UPDATE", "SET", "MODIFY", "STATUS", "MAKE", "PUT", "ADD",
-        // Prepositions & Conjunctions
         "TO", "FROM", "THE", "IN", "OF", "ON", "FOR", "AND", "WITH",
-        // Statuses
         "VERIFIED", "NEW", "MISMATCH", "REMOVED", "UNCHANGED", 
-        // Telecom Nouns
         "SITE", "SITES", "REMARK", "REMARKS", "ID", "PLA", "BCF", "NAME",
-        // Conversational Filler
         "PLEASE", "CAN", "YOU", "COULD", "WOULD", "JUST", "HELP", "ME", "WANT", "NEED",
-        // Queries
         "LIST", "SHOW", "FIND", "COUNT", "ALL"
       ];
       
@@ -187,7 +179,7 @@ export default function SMDashboard() {
                 setResults(updatedResults);
                 setChatHistory(prev => [...prev, { sender: 'system', text: `✓ Successfully applied updates to ${actualChangesCount} rows.` }]);
               }
-            } catch (crashError) {
+            } catch {
               setChatHistory(prev => [...prev, { sender: 'system', text: `⚠️ Table protected from corrupted AI data.`, isError: true }]);
             }
           }
@@ -427,7 +419,6 @@ export default function SMDashboard() {
       fontSize: '0.85rem'
     };
 
-    // THE FIX: Added boxSizing to force columns to respect their percentages!
     const columnStyle = {
       whiteSpace: 'nowrap',
       overflow: 'hidden',
@@ -443,8 +434,14 @@ export default function SMDashboard() {
         onClick={() => {
           const lat = parseFloat(row.lat);
           const lng = parseFloat(row.lng);
-          setSelectedSite({ lat, lng, id: row.plaId, baseLocation: row.baseLocation, nmsName: row.nmsName, zoom: 18 });
-          setSelectedRowDetails(row);
+          
+          if (!isNaN(lat) && !isNaN(lng)) {
+            setSelectedSite({ lat, lng, id: row.plaId, baseLocation: row.baseLocation, nmsName: row.nmsName, zoom: 18 });
+            setSelectedRowDetails(row);
+          } else {
+            console.warn("Invalid coordinates for site:", row.plaId);
+            setSelectedRowDetails(row); 
+          }
         }}
       >
         <div style={{ ...columnStyle, width: '10%', fontWeight: 'bold' }}>
@@ -528,9 +525,10 @@ export default function SMDashboard() {
       headerActions={headerActions}
     >
       <main className="main-layout">
-        <aside className="sidebar">
+        
+        <aside className="sidebar" style={{ width: '320px', minWidth: '320px', flexShrink: 0 }}>
           
-          <div className="sidebar-top-section" ref={sidebarTopRef} style={{ flex: showAiPanel ? '1' : '0 0 350px' }}>
+          <div className="sidebar-top-section" ref={sidebarTopRef} style={{ width: '100%', flex: showAiPanel ? '1' : '0 0 350px' }}>
             <div className={`sidebar-carousel ${showAiPanel ? 'show-ai' : (selectedRowDetails ? 'show-details' : '')}`}>
               
               <div className="carousel-panel">
@@ -717,7 +715,10 @@ export default function SMDashboard() {
           <div className="output-card">
             <div className="dashboard-container">
               <AnalyticsDashboard data={results} activeFilter={filterStatus} onFilterChange={setFilterStatus} isDarkMode={isDarkMode} />
-              <div className="cards-section">
+              
+              {/* 🚀 THE DYNAMIC COMPACT MODE CLASS */}
+              <div className={`cards-section ${results.length > 0 ? 'compact-mode' : ''}`}>
+                
                 <div className={`stat-card luxury-glass total ${filterStatus === 'ALL' ? 'active' : ''}`} onClick={() => setFilterStatus('ALL')} style={{cursor: 'pointer'}}>
                   <img src={isDarkMode ? ICONS.checkDark : ICONS.checkLight} className="stat-icon" alt="Total" />
                   <div className="stat-label">Total Validated</div>
@@ -738,7 +739,7 @@ export default function SMDashboard() {
 
                 <div className={`stat-card luxury-glass removed ${filterStatus === 'REMOVED' ? 'active' : ''}`} onClick={() => setFilterStatus('REMOVED')} style={{cursor: 'pointer'}}>
                   <img src={isDarkMode ? ICONS.removedDark : ICONS.removedLight} className="stat-icon" alt="Removed" />
-                  <div className="stat-label">Missing (Removed)</div>
+                  <div className="stat-label">Removed</div>
                   <div className="stat-value">{stats.removed}</div>
                 </div>
 
@@ -794,7 +795,6 @@ export default function SMDashboard() {
               {results.length > 0 ? (
                 <div className="table-wrapper" style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
                   
-                  {/* THE FIX: Header padding matches the scroll offset perfectly and elements use border-box */}
                   <div style={{ 
                     display: 'flex', 
                     padding: '12px 35px 12px 20px', 
@@ -816,7 +816,7 @@ export default function SMDashboard() {
                     <List
                       height={500} 
                       itemCount={filteredResults.length}
-                      itemSize={45}
+                      itemSize={60}
                       width={'100%'}
                       overscanCount={10}
                     >

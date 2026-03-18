@@ -1,4 +1,4 @@
-@import "../../styles/variables.css";
+@import "../../styles/global_styles.css";
 
 /* =========================================================
    2. MAIN LAYOUT (FLOATING WINDOW EFFECT) 
@@ -51,9 +51,6 @@ body.dark-mode .top-bar {
   overflow: hidden;
 }
 
-/* =========================================================
-   3. MODERN SLIDING SIDEBAR (3-PANEL RESTORED)
-========================================================= */
 /* =========================================================
    3. MODERN SLIDING SIDEBAR (COMPACT & STICKY)
 ========================================================= */
@@ -113,69 +110,22 @@ body.dark-mode .top-bar {
   padding-top: 1.5rem; /* COMPACTED */
 }
 
-.upload-group {
-  margin-bottom: 1rem; /* COMPACTED */
-  position: relative;
-  z-index: 1;
-}
-
-.input-label {
-  display: block;
-  font-size: 0.85rem;
-  font-weight: 600;
-  margin-bottom: 6px; /* COMPACTED */
-  color: var(--text-secondary);
-}
-
 .file-drop-area {
+  margin-top: 10px;
+  border: 1px dashed #3501c5; /* Add here instead */
   display: flex; 
   flex-direction: row;
   align-items: center;
-  gap: 15px; /* COMPACTED */
-  min-height: 45px; /* COMPACTED */
+  gap: 30px;
+  min-height: 50px;
+  
+  /* --- THE FIX: Ensure it captures hover correctly --- */
   position: relative;
-  background: var(--bg-input); 
+  background: var(--bg-input); /* Uses your glass input variable */
   border-radius: var(--radius-btn);
-  padding: 5px 15px;
+  padding: 5px 10px;
   border: 1px solid var(--border-light);
   transition: all 0.3s ease;
-  cursor: pointer;
-}
-
-.file-drop-area:hover {
-  background: var(--bg-hover);
-  border-color: var(--brand-purple);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-soft);
-}
-
-.file-drop-area:hover .upload-icon {
-  transform: translateY(-2px);
-  opacity: 1;
-}
-
-body.dark-mode .file-drop-area:hover {
-  background: rgba(139, 92, 246, 0.1);
-}
-
-.file-msg {
-  font-size: 0.85rem;
-  font-weight: 500;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 180px; 
-  display: block;
-}
-
-.file-input {
-  position: absolute;
-  left: 0;
-  top: 0;
-  height: 100%;
-  width: 100%;
-  opacity: 0;
   cursor: pointer;
 }
 
@@ -434,7 +384,7 @@ body.dark-mode .active-row {
 }
 
 .status-badge {
-  display: inline-block; /* THE FIX: Forces the browser to respect vertical padding */
+  display: inline-block; 
   padding: 5px 12px;
   border-radius: 20px;
   font-size: 0.75rem;
@@ -634,12 +584,62 @@ body.dark-mode .active-row {
 .dashboard-container {
   display: flex;
   gap: 1.5rem;
-  padding: 2rem 2rem 1rem 2rem;
+  padding: 1.5rem 2rem 0.5rem 2rem;
   background-color: transparent;
   border-bottom: none;
-  align-items: stretch;
+  align-items: center; 
+  flex-shrink: 0;
+  flex-wrap: nowrap; /* Prevents the left graph and right cards from breaking apart */
+}
+
+/* =========================================================
+   11. HORIZONTAL BAR CHART (DELTA BREAKDOWN)
+========================================================= */
+
+.analytics-bar-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 10px 16px;
+  border-radius: 12px;
+  width: 250px; /* Perfectly matches the footprint of the old chart */
+  height: 56px; /* Matches the exact height of your new compact buttons! */
   flex-shrink: 0;
 }
+
+.bar-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.analytics-bar-card .chart-title {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  letter-spacing: 0.5px;
+  margin: 0;
+}
+
+.stacked-bar-wrapper {
+  display: flex;
+  height: 8px; /* The thickness of the progress bar */
+  width: 100%;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--bg-input); /* Fallback background */
+}
+
+.bar-segment {
+  height: 100%;
+  transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Hardcoded to match your exact button border colors */
+.bar-segment.unchanged { background-color: #46aa27; }
+.bar-segment.new { background-color: #0db15c; }
+.bar-segment.mismatch { background-color: #ff8b07; }
+.bar-segment.removed { background-color: #f02849; }
 
 .chart-section { 
   flex: 0 0 250px;
@@ -679,9 +679,9 @@ body.dark-mode .chart-section {
 
 .cards-section {
   flex: 1;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 1.5rem;
+  display: flex; /*  Swapped from Grid to Flexbox for fluid squeezing */
+  flex-direction: row;
+  gap: 1rem;
 }
 
 .stat-card.active {
@@ -700,6 +700,7 @@ body.dark-mode .stat-card.active {
 .stat-card.mismatch.active { border-bottom: 4px solid #ff8b07; box-shadow: 0 12px 20px -10px rgba(255, 139, 7, 0.6); }
 .stat-card.total.active { border-bottom: 4px solid var(--brand-purple); box-shadow: 0 12px 20px -10px rgba(112, 51, 255, 0.6); }
 
+/* Ensure base card has smooth transition for everything */
 .stat-card {
   position: relative;
   overflow: hidden;
@@ -709,6 +710,12 @@ body.dark-mode .stat-card.active {
   align-items: center;
   justify-content: center;
   padding: 1.5rem 1rem; 
+  
+  flex: 1; /* 🚀 Forces them to share the row equally */
+  min-width: 0; /* 🚀 Allows them to squeeze gracefully instead of breaking to a new row */
+  height: 120px; /* 🚀 Explicit height to match the graph! */
+  box-sizing: border-box;
+
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.45) 0%, rgba(255, 255, 255, 0.05) 100%);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
@@ -740,7 +747,7 @@ body.dark-mode .stat-card {
   width: 24px;
   height: 24px;
   opacity: 0.6;
-  transition: all 0.3s ease;
+  transition: all 0.4s ease;
 }
 
 .stat-card:hover .stat-icon {
@@ -755,12 +762,14 @@ body.dark-mode .stat-card {
   text-transform: capitalize;
   margin-bottom: 0.5rem;
   text-align: center;
+  transition: all 0.4s ease;
 }
 
 .stat-value {
   font-size: 1.8rem;
   font-weight: 700;
   color: var(--text-primary);
+  transition: all 0.4s ease;
 }
 
 .stat-card.new { border-bottom-color: #0db15c; }
@@ -983,3 +992,116 @@ body.dark-mode .preview-menu {
 @keyframes logo-pulse { 0%, 100% { transform: scale(0.9); opacity: 0.8; } 50% { transform: scale(1.05); opacity: 1; } }
 @keyframes ripple { 0% { transform: scale(1); opacity: 1; } 100% { transform: scale(1.5); opacity: 0; } }
 @keyframes fadeText { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+
+/* =========================================================
+   10. COMPACT MODE ANIMATIONS (STAT CARDS)
+========================================================= */
+
+/* 1. Container layout */
+.cards-section.compact-mode {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 15px; /* Restored the original gap spacing */
+  margin-bottom: 0px; 
+}
+
+/* 2. Morph the cards into sleek, WIDE buttons */
+/* 2. Morph the cards into sleek, WIDE buttons */
+.cards-section.compact-mode .stat-card {
+  flex-direction: row; 
+  align-items: center;
+  padding: 10px 12px; /* 🚀 Tighter padding to give text more room */
+  height: 68px; 
+  box-sizing: border-box; 
+  border-radius: 12px; 
+  gap: 8px; /* 🚀 Tighter gap between icon and text */
+  flex: 1; 
+  min-width: 150px; /* 🚀 Allows it to squeeze down a bit more safely */
+}
+
+/* 3. Scale the icons up slightly for the new height */
+.cards-section.compact-mode .stat-icon {
+  position: relative; 
+  top: auto;
+  right: auto;
+  width: 22px; /* Scaled up */
+  height: 22px;
+  margin-bottom: 0;
+  opacity: 1;
+}
+
+/* 4. Adjust the text */
+.cards-section.compact-mode .stat-label {
+  font-size: 0.75rem; /* 🚀 Dropped slightly to fit long words */
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis; /* 🚀 Gracefully adds "..." if it runs out of space! */
+}
+
+/* 5. Emphasize the number and pin it to the right */
+.cards-section.compact-mode .stat-value {
+  font-size: 1.2rem; 
+  margin: 0 0 0 auto; 
+  padding-left: 10px; /* 🚀 Tighter padding before the divider line */
+  border-left: 1px solid rgba(128, 128, 128, 0.2); 
+}
+/* =========================================================
+   11. HORIZONTAL BAR CHART (DELTA BREAKDOWN)
+========================================================= */
+
+.analytics-bar-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 12px 20px;
+  
+  flex: 1.5; 
+  min-width: 250px; 
+  max-width: 300px; 
+  box-sizing: border-box;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  
+  height: 120px; /* 🚀 Exact match with default stat-cards! */
+  border-radius: var(--radius-card); 
+}
+
+.analytics-bar-card.compact-mode {
+  /* 🚀 COMPACT STATE (After Scan): Squishes down to exactly match the buttons */
+  height: 68px; 
+  border-radius: 12px;
+}
+
+.bar-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.analytics-bar-card .chart-title {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  letter-spacing: 0.5px;
+  margin: 0;
+}
+
+.stacked-bar-wrapper {
+  display: flex;
+  height: 8px; 
+  width: 100%;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--bg-input); 
+}
+
+.bar-segment {
+  height: 100%;
+  transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.bar-segment.unchanged { background-color: #46aa27; }
+.bar-segment.new { background-color: #0db15c; }
+.bar-segment.mismatch { background-color: #ff8b07; }
+.bar-segment.removed { background-color: #f02849; }
