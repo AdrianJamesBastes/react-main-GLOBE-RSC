@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 
-export default function AnalyticsDashboard({ data, isDarkMode }) {
+// 🚀 THE FIX: Added 'activeFilter' to the props!
+export default function AnalyticsDashboard({ data, isDarkMode, activeFilter }) {
   const stats = useMemo(() => {
     if (!data || data.length === 0) return null;
     
@@ -20,10 +21,8 @@ export default function AnalyticsDashboard({ data, isDarkMode }) {
     };
   }, [data]);
 
-  // 🚀 THE TRIGGER: Checks if data exists to activate the 68px compact mode
   const isCompact = data && data.length > 0;
 
-  // EMPTY STATE (Tall mode before scan)
   if (!stats || stats.total === 0) {
     return (
       <div className={`analytics-bar-card luxury-glass ${isCompact ? 'compact-mode' : ''}`} style={{ opacity: 0.6 }}>
@@ -40,6 +39,14 @@ export default function AnalyticsDashboard({ data, isDarkMode }) {
 
   const getWidth = (value) => `${(value / stats.total) * 100}%`;
 
+  // 🚀 THE LOGIC: Determines if a segment should glow or dim based on the clicked card
+  const getSegmentClass = (segmentName) => {
+    if (!activeFilter || activeFilter === 'ALL') return `bar-segment ${segmentName}`;
+    return activeFilter === segmentName.toUpperCase() 
+      ? `bar-segment ${segmentName} active-segment` 
+      : `bar-segment ${segmentName} dimmed-segment`;
+  };
+
   return (
     <div className={`analytics-bar-card luxury-glass ${isCompact ? 'compact-mode' : ''}`}>
       <div className="bar-header">
@@ -47,10 +54,10 @@ export default function AnalyticsDashboard({ data, isDarkMode }) {
       </div>
       
       <div className="stacked-bar-wrapper">
-        {stats.unchanged > 0 && <div className="bar-segment unchanged" style={{ width: getWidth(stats.unchanged) }} title={`Verified: ${stats.unchanged}`}></div>}
-        {stats.new > 0 && <div className="bar-segment new" style={{ width: getWidth(stats.new) }} title={`New: ${stats.new}`}></div>}
-        {stats.mismatch > 0 && <div className="bar-segment mismatch" style={{ width: getWidth(stats.mismatch) }} title={`Mismatch: ${stats.mismatch}`}></div>}
-        {stats.removed > 0 && <div className="bar-segment removed" style={{ width: getWidth(stats.removed) }} title={`Removed: ${stats.removed}`}></div>}
+        {stats.unchanged > 0 && <div className={getSegmentClass('unchanged')} style={{ width: getWidth(stats.unchanged) }} title={`Verified: ${stats.unchanged}`}></div>}
+        {stats.new > 0 && <div className={getSegmentClass('new')} style={{ width: getWidth(stats.new) }} title={`New: ${stats.new}`}></div>}
+        {stats.removed > 0 && <div className={getSegmentClass('removed')} style={{ width: getWidth(stats.removed) }} title={`Removed: ${stats.removed}`}></div>}
+        {stats.mismatch > 0 && <div className={getSegmentClass('mismatch')} style={{ width: getWidth(stats.mismatch) }} title={`Mismatch: ${stats.mismatch}`}></div>}
       </div>
     </div>
   );
