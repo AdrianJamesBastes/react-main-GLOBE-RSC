@@ -161,3 +161,34 @@ body.dark-mode .btn {
   align-self: stretch;
 }
 
+/* 🚀 Drill-down badge styling */
+.drill-down-badge {
+  display: inline-flex; 
+  align-items: center; 
+  justifyContent: center; 
+  padding: 6px 16px; 
+  border-radius: 99px; 
+  background-color: #fde8e8; 
+  color: #e02424; 
+  border: 1px solid rgba(224, 36, 36, 0.2);
+  font-weight: bold;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.drill-down-badge:hover {
+  transform: scale(1.1);
+  background-color: #e02424;
+  color: white;
+  box-shadow: 0 4px 12px rgba(224, 36, 36, 0.4);
+}
+
+body.dark-mode .drill-down-badge {
+  background-color: rgba(224, 36, 36, 0.15);
+}
+
+body.dark-mode .drill-down-badge:hover {
+  background-color: #e02424;
+  color: white;
+}
