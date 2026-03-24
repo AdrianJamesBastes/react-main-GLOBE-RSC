@@ -3,6 +3,7 @@
     "vite-plugin-singlefile": "^2.3.0"
   },
   "dependencies": {
+    "react-window": "^2.2.7",
     "recharts": "^3.7.0"
   }
 }
