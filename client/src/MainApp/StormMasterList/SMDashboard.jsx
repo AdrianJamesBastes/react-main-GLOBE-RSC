@@ -549,7 +549,7 @@ export default function SMDashboard() {
                     <input className="file-input" type="file" accept=".csv" onChange={(e) => handleFileChange(e, setMonitorFile2)} />
                   </div>
                 </div>
-                <button className="btn primary-filled scan-btn full-width" onClick={handleScan} disabled={isLoading} style={{ marginTop: 'auto', padding: '12px' }}>
+                <button className="btn primary-filled scan-btn full-width" onClick={handleScan} disabled={isLoading} style={{ marginTop: '10px', padding: '12px' }}>
                   <img src={search} alt="Scan" className="btn-icon" style={{ width: '16px' }} />
                   <span>{isLoading ? "Scanning..." : "Scan Files"}</span>
                 </button>
