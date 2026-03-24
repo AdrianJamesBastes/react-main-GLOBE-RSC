@@ -1,43 +1,5 @@
 import { dict, towerC, provinceNew, cityNew } from './SMSite';
-
-function parseCsv(text) {
-  if (!text || !text.trim()) return [];
-  const rows = [];
-  let row = [];
-  let field = '';
-  let inQuotes = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    const next = text[i + 1];
-
-    if (ch === '"') {
-      if (inQuotes && next === '"') {
-        field += '"';
-        i++;
-      } else {
-        inQuotes = !inQuotes;
-      }
-    } else if (ch === ',' && !inQuotes) {
-      row.push(field);
-      field = '';
-    } else if ((ch === '\n' || ch === '\r') && !inQuotes) {
-      if (ch === '\r' && next === '\n') continue;
-      row.push(field);
-      rows.push(row);
-      row = [];
-      field = '';
-    } else {
-      field += ch;
-    }
-  }
-
-  if (field || row.length > 0) {
-    row.push(field);
-    rows.push(row);
-  }
-
-  return rows;
-}
+import { parseCsv } from '../../services/fileParsers';
 
 export function extractBaseAndSuffix(nmsString) {
   if (!nmsString) return { cleanBase: '', displayBase: '', suffix: '', suffixSet: new Set() };

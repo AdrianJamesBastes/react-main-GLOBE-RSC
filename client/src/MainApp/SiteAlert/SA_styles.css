@@ -23,7 +23,7 @@ body.dark-mode .sadashboard {
     display: flex;
     justify-content: center;
     gap: 10px;
-    background-color: #1a73e8 !important;
+    background-color: var(--btn-scan-bg) !important;
 }
 
 .btn-icon {
@@ -39,7 +39,7 @@ body.dark-mode .sadashboard {
 }
 
 body.dark-mode .scan-btn {
-    background-color: #0f2d61 !important;
+    background-color: var(--btn-scan-bg) !important;
 }
 
 .search-bar {
@@ -78,7 +78,7 @@ body.dark-mode .search-bar {
 }
 
 .primary-filled {
-    background: linear-gradient(135deg, rgba(112, 51, 255, 0.8) 0%, rgba(138, 92, 246, 0.8) 100%), rgba(255, 255, 255, 0.1);
+    background: var(--btn-primary-gradient), rgba(255, 255, 255, 0.1);
     color: white;
     box-shadow: 0 4px 15px rgba(112, 51, 255, 0.4);
     border: 1px solid rgba(255, 255, 255, 0.3);
@@ -212,9 +212,9 @@ body.dark-mode .btn {
   justifyContent: center; 
   padding: 6px 16px; 
   border-radius: 99px; 
-  background-color: #fde8e8; 
-  color: #e02424; 
-  border: 1px solid rgba(224, 36, 36, 0.2);
+  background-color: var(--badge-danger-bg); 
+  color: var(--badge-danger-text); 
+  border: 1px solid var(--badge-danger-border);
   font-weight: bold;
   font-size: 0.85rem;
   cursor: pointer;
@@ -223,16 +223,16 @@ body.dark-mode .btn {
 
 .drill-down-badge:hover {
   transform: scale(1.1);
-  background-color: #e02424;
+  background-color: var(--color-danger);
   color: white;
   box-shadow: 0 4px 12px rgba(224, 36, 36, 0.4);
 }
 
 body.dark-mode .drill-down-badge {
-  background-color: rgba(224, 36, 36, 0.15);
+  background-color: var(--badge-danger-bg);
 }
 
 body.dark-mode .drill-down-badge:hover {
-  background-color: #e02424;
+  background-color: var(--color-danger);
   color: white;
 }

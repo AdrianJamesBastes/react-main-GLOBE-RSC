@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 
 // 🚀 THE FIX: Added 'activeFilter' to the props!
-export default function AnalyticsDashboard({ data, isDarkMode, activeFilter }) {
+export default function AnalyticsDashboard({ data, activeFilter }) {
   const stats = useMemo(() => {
     if (!data || data.length === 0) return null;
     

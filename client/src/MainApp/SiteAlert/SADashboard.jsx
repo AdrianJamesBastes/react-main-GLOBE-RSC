@@ -1,5 +1,8 @@
-import { useState, useMemo, useEffect, useRef, useTransition } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import useDarkMode from '../../hooks/useDarkMode';
+import useSearchDebounce from '../../hooks/useSearchDebounce';
+import { processWirelessAlarms, processTransportAlarms } from '../../services/dataGrouper';
+
 import globeLogoDark from '../../assets/Globe_LogoW.png';
 import globeLogoLight from '../../assets/Globe_LogoB.png';
 import searchIcon from '../../assets/search.png';
@@ -13,254 +16,44 @@ import * as XLSX from 'xlsx';
 import { useNavigate } from "react-router-dom";
 import { FixedSizeList as List, VariableSizeList } from 'react-window';
 import DashboardLayout from '../../components/DashboardLayout';
+import { ThemedButton, ThemedBadge } from '../../components/common';
 import '../../styles/Dashboard_styles.css';
-
-// Function for isolating alarms in Wireless
-function wirelessAlertSite(nmsJsonString, masterJsonString) {
-  try {
-    var nmsData = JSON.parse(nmsJsonString);
-    var masterData = JSON.parse(masterJsonString);
-
-    if (nmsData.length === 0 || masterData.length === 0) {
-      throw new Error("File(s) empty.");
-    }
-
-    function getColValue(row, possibleNames) {
-      var keys = Object.keys(row);
-      for (var i = 0; i < keys.length; i++) {
-        var key = String(keys[i]).trim().toUpperCase();
-        if (possibleNames.includes(key)) return row[keys[i]];
-      }
-      return null;
-    }
-
-    var groupedAlarms = {};
-
-    for (let i = 0; i < nmsData.length; i++) {
-      let row = nmsData[i];
-      let alarm = getColValue(row, ['ALARM TEXT', 'Alarm Text']);
-      let dn = getColValue(row, ['DISTINGUISHED NAME', 'Distinguished Name']);
-      let si = getColValue(row, ['SUPPLEMENTARY INFORMATION', 'supplementary information'])
-
-      if (!dn || !alarm || !si) continue;
-
-      // 🚀 FIXED: Changed delimiter to ___
-      let key = alarm + "___" + dn + "___" + si;
-
-      if (!groupedAlarms[key]) {
-        groupedAlarms[key] = []; 
-      }
-      groupedAlarms[key].push(row); 
-    }
-
-    var filtered = [];
-
-    for (let key in groupedAlarms) {
-      let rawRowsArray = groupedAlarms[key];
-      let count = rawRowsArray.length;
-
-      if (count >= 10) {
-        // 🚀 FIXED: Split by ___
-        let parts = key.split("___");
-        filtered.push({
-          alarm: parts[0],
-          dn: parts[1],
-          si: parts[2],
-          count: count,
-          rawRows: rawRowsArray 
-        });
-      }
-    }
-
-    var map2G = {};
-    var mapMRBTS = {};
-
-    for (let j = 0; j < masterData.length; j++) {
-      let dn2g = getColValue(masterData[j], ['2G DN', '2GDN']);
-      if (dn2g) {
-        map2G[String(dn2g).trim().toUpperCase()] = masterData[j];
-      }
-      let mrbts = getColValue(masterData[j], ['MRBTS ID', 'MRBTS']);
-      if (mrbts) {
-        mapMRBTS[String(mrbts).trim().toUpperCase()] = masterData[j];
-      }
-    }
-
-    var result = [];
-
-    for (let idx = 0; idx < filtered.length; idx++) {
-      let item = filtered[idx];
-      let dnItem = String(item.dn).toUpperCase();
-      let alarmItem = item.alarm;
-      let siItem = String(item.si).toUpperCase();
-
-      if (dnItem.includes("BCF")) {
-        let splitDn = dnItem.split("/");
-        let cleanDn = splitDn.slice(0, 3).join("/");
-        for (let key2 in map2G) {
-          if (cleanDn.includes(key2) || key2.includes(cleanDn)) {
-            let row2 = map2G[key2];
-            result.push({
-              alert: !isNaN(Number(siItem)) ? alarmItem : siItem,
-              pla: getColValue(row2, ['PLA ID', 'PLA_ID']),
-              name: getColValue(row2, ['BCF NAME', 'BCF_NAME']),
-              dn: item.dn,
-              count: item.count,
-              rawRows: item.rawRows
-            });
-            break;
-          }
-        }
-      }
-      else if (dnItem.includes("MRBTS")) {
-        let splitLTE = dnItem.split("/");
-        let cleanLTE = splitLTE.slice(0, 2).join("/");
-        for (let key2 in mapMRBTS) {
-          if (cleanLTE.includes(key2) || key2.includes(cleanLTE)) {
-            let row2 = mapMRBTS[key2];
-            result.push({
-              alert: !isNaN(Number(siItem)) ? alarmItem : siItem,
-              pla: getColValue(row2, ['PLA ID', 'PLA_ID']),
-              name: getColValue(row2, ['PROPOSED LTE NAME', 'Proposed LTE Name']),
-              dn: item.dn,
-              count: item.count,
-              rawRows: item.rawRows
-            });
-            break;
-          }
-        }
-      }
-    }
-
-    result.sort(function(a, b) {
-      return b.count - a.count;
-    });
-
-    return JSON.stringify({ success: true, data: result });
-
-  } catch (e) {
-    return JSON.stringify({ success: false, error: e.toString() });
-  }
-}
-
-// Function for isolating alarms in Transport
-function transportAlertSite(nmsJsonString) {
-  try {
-    var nmsData = JSON.parse(nmsJsonString);
-
-    if (nmsData.length === 0) {
-      throw new Error("File(s) empty.");
-    }
-
-    function getColValue(row, possibleNames) {
-      var keys = Object.keys(row);
-      for (var i = 0; i < keys.length; i++) {
-        var key = String(keys[i]).trim().toUpperCase();
-        if (possibleNames.includes(key)) return row[keys[i]];
-      }
-      return null;
-    }
-
-    var groupedAlarms = {};
-
-    for (let i = 0; i < nmsData.length; i++) {
-      let row = nmsData[i];
-      
-      let alarm = getColValue(row, ['NAME']) || "Unknown Alarm";
-      let li = getColValue(row, ['LOCATION INFO']) || "N/A";
-      let sn = getColValue(row, ['ALARM SOURCE']) || "Unknown Site";
-      let severity = getColValue(row, ['SEVERITY']) || "N/A";
-
-      if (alarm === "Unknown Alarm" && sn === "Unknown Site") continue;
-
-      // 🚀 FIXED: Changed delimiter to ___
-      let key = alarm + "___" + li + "___" + sn + "___" + severity;
-
-      if (!groupedAlarms[key]) {
-        groupedAlarms[key] = []; 
-      }
-      groupedAlarms[key].push(row); 
-    }
-
-    var result = [];
-
-    for (let key in groupedAlarms) {
-      let rawRowsArray = groupedAlarms[key];
-      let count = rawRowsArray.length;
-
-      if (count >= 10) {
-        // 🚀 FIXED: Split by ___
-        let parts = key.split("___");
-        result.push({
-          alarm: parts[0],
-          li: parts[1],
-          sn: parts[2],
-          severity: parts[3],
-          count: count,
-          rawRows: rawRowsArray 
-        });
-      }
-    }
-
-    result.sort(function(a, b) {
-      return b.count - a.count;
-    });
-
-    return JSON.stringify({ success: true, data: result });
-
-  } catch(e) {
-    return JSON.stringify({ success: false, error: e.toString() });
-  }
-}
 
 export default function SADashboard() {
   const [monitorFile1, setMonitorFile1] = useState(null); 
   const [monitorFile2, setMonitorFile2] = useState(null); 
   const [isLoading, setIsLoading] = useState(false);
   const [results, setResults] = useState([]);
-
-  const [dashboardMode, setDashboardMode] = useState('wireless'); 
+  const [dashboardMode, setDashboardMode] = useState('wireless');
 
   const navigate = useNavigate();
   const [isDarkMode, toggleTheme] = useDarkMode();
+  const { searchTerm, setSearchTerm, debouncedTerm } = useSearchDebounce();
 
   const [selectedRowDetails, setSelectedRowDetails] = useState(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [activeSidebarView, setActiveSidebarView] = useState('input');
-
-  const [searchTerm, setSearchTerm] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [isPending, startTransition] = useTransition();
 
   const [drillDownData, setDrillDownData] = useState(null);
   const [modalSearchTerm, setModalSearchTerm] = useState(""); 
   const [isDrillDownRendered, setIsDrillDownRendered] = useState(false);
   const [isDrillDownVisible, setIsDrillDownVisible] = useState(false);
   const [drillDownOrigin, setDrillDownOrigin] = useState('50% 50%');
-
   const [modalListHeight, setModalListHeight] = useState(600);
 
   const expandBtnRef = useRef(null);
   const [isGraphModalRendered, setIsGraphModalRendered] = useState(false); 
   const [isGraphModalVisible, setIsGraphModalVisible] = useState(false);   
   const [graphModalOrigin, setGraphModalOrigin] = useState('0% 0%');                 
-
   const [selectedGraphAlarm, setSelectedGraphAlarm] = useState(null);
 
   const listContainerRef = useRef(null);
   const [mainListSize, setMainListSize] = useState({ width: '100%', height: 600 });
-
   const monitorFile1Ref = useRef(null);
   const monitorFile2Ref = useRef(null);
 
   const CHART_COLORS = ['#8a2be2', '#1a73e8', '#00bfa5', '#f0a500', '#f02849'];
-
   const currentLogo = isDarkMode ? globeLogoDark : globeLogoLight;
-
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedSearch(searchTerm), 300);
-    return () => clearTimeout(timer);
-  }, [searchTerm]);
 
   useEffect(() => {
     const handleResize = () => setModalListHeight((window.innerHeight * 0.9) - 190);
@@ -358,55 +151,44 @@ export default function SADashboard() {
 
       if (dashboardMode === 'wireless') {
         const masterData = await readUniversalFile(monitorFile2);
-        try {
-          const response = wirelessAlertSite(JSON.stringify(nmsData), JSON.stringify(masterData));
-          const res = JSON.parse(response);
-          if (res.success) {
-            setResults(res.data);
-            if (res.data.length > 0) {
-              setActiveSidebarView('analytics');
-              setIsSidebarCollapsed(false); 
-            } else {
-              alert("No matching wireless alarms found (10+ repetitions required).");
-            }
+        const result = processWirelessAlarms(nmsData, masterData);
+        if (result.success) {
+          setResults(result.data);
+          if (result.data.length > 0) {
+            setActiveSidebarView('analytics');
+            setIsSidebarCollapsed(false); 
           } else {
-            alert("Error: " + res.error);
+            alert("No matching wireless alarms found (10+ repetitions required).");
           }
-          setIsLoading(false);
-        } catch (err) {
-          alert("Error: " + err.message);
-          setIsLoading(false);
+        } else {
+          alert("Error: " + result.error);
         }
+        setIsLoading(false);
       } 
       else if (dashboardMode === 'transport') {
-        try {
-          const response = transportAlertSite(JSON.stringify(nmsData));
-          const res = JSON.parse(response);
-          if (res.success) {
-            const normalizedData = res.data.map(item => ({
-              alert: item.alarm || "N/A",
-              dn: item.li || "N/A",
-              name: item.sn || "N/A",
-              pla: item.severity || "N/A",
-              count: item.count,
-              rawRows: item.rawRows
-            }));
+        const result = processTransportAlarms(nmsData);
+        if (result.success) {
+          // Normalize transport data to match wireless format
+          const normalizedData = result.data.map(item => ({
+            alert: item.alarm || "N/A",
+            dn: item.li || "N/A",
+            name: item.sn || "N/A",
+            pla: item.severity || "N/A",
+            count: item.count,
+            rawRows: item.rawRows
+          }));
 
-            setResults(normalizedData);
-            if (normalizedData.length > 0) {
-              setActiveSidebarView('analytics');
-              setIsSidebarCollapsed(false); 
-            } else {
-              alert("No matching transport alarms found.");
-            }
+          setResults(normalizedData);
+          if (normalizedData.length > 0) {
+            setActiveSidebarView('analytics');
+            setIsSidebarCollapsed(false); 
           } else {
-            alert("Error: " + res.error);
+            alert("No matching transport alarms found.");
           }
-          setIsLoading(false);
-        } catch (err) {
-          alert("Error: " + err.message);
-          setIsLoading(false);
+        } else {
+          alert("Error: " + result.error);
         }
+        setIsLoading(false);
       }
 
     } catch (error) {
@@ -483,11 +265,11 @@ export default function SADashboard() {
   };
 
   const filteredResults = useMemo(() => {
-    const term = debouncedSearch.toLowerCase();
+    const term = debouncedTerm.toLowerCase();
     return results
       .filter(row => [row.pla, row.name, row.alert, row.dn].filter(Boolean).some(value => value.toString().toLowerCase().includes(term)))
       .sort((a, b) => b.count - a.count); 
-  }, [results, debouncedSearch]);
+  }, [results, debouncedTerm]);
 
   const filteredModalRows = useMemo(() => {
     if (!drillDownData) return [];
@@ -588,22 +370,22 @@ export default function SADashboard() {
 
     return (
       <div style={rowStyle} className="row-hover" onClick={() => { setSelectedRowDetails(row); setActiveSidebarView('details'); setIsSidebarCollapsed(false); }}>
-        <div style={{ ...columnStyle, width: '12%', fontWeight: 'bold', color: dashboardMode === 'transport' ? '#f02849' : 'var(--text-primary)' }}>
+        <div style={{ ...columnStyle, width: '12%', fontWeight: 'bold', color: dashboardMode === 'transport' ? 'var(--color-danger-light)' : 'var(--text-primary)' }}>
            {row.pla || "N/A"}
         </div>
-        <div style={{ ...columnStyle, width: '23%', color: '#1a73e8', fontWeight: 'bold' }}>
+        <div style={{ ...columnStyle, width: '23%', color: 'var(--color-info)', fontWeight: 'bold' }}>
            {row.name || "N/A"}
         </div>
         <div style={{ ...columnStyle, width: '20%', fontFamily: 'ARIAL', color: 'var(--text-primary)' }}>
            {row.alert || "N/A"}
         </div>
-        <div style={{ ...columnStyle, width: '37%', fontFamily: 'monospace', fontSize: '1rem', color: isDarkMode ? '#ffffff' : 'var(--text-secondary)' }}>
+        <div style={{ ...columnStyle, width: '37%', fontFamily: 'monospace', fontSize: '1rem', color: 'var(--text-primary)' }}>
            {row.dn || "N/A"}
         </div>
         <div style={{ ...columnStyle, width: '8%', textAlign: 'center' }}>
-           <button className="drill-down-badge" onClick={(e) => openDrillDownModal(e, row)} title="Click to view all occurrences" style={{outline: 'none'}}>
+           <ThemedBadge variant="danger" onClick={(e) => openDrillDownModal(e, row)} title="Click to view all occurrences">
              {row.count}
-           </button>
+           </ThemedBadge>
         </div>
       </div>
     );
@@ -667,11 +449,11 @@ export default function SADashboard() {
           <p style={{ margin: '0 0 10px 0', fontWeight: 'bold', borderBottom: '1px solid var(--border-light)', paddingBottom: '5px', fontSize: '0.9rem' }}>{data.name}</p>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '25px', fontSize: '0.85rem' }}>
             <span style={{ color: 'var(--text-secondary)' }}>Total Occurrences:</span>
-            <span style={{ fontWeight: 'bold', color: '#f02849' }}>{data.count}</span>
+            <span style={{ fontWeight: 'bold', color: 'var(--color-danger)' }}>{data.count}</span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '25px', marginTop: '5px', fontSize: '0.85rem' }}>
             <span style={{ color: 'var(--text-secondary)' }}>Network Impact:</span>
-            <span style={{ fontWeight: 'bold', color: '#1a73e8' }}>{data.totalPercentage}%</span>
+            <span style={{ fontWeight: 'bold', color: 'var(--color-info)' }}>{data.totalPercentage}%</span>
           </div>
           <p style={{ margin: '10px 0 0 0', fontSize: '0.7rem', color: 'var(--brand-purple)', fontStyle: 'italic' }}>Click to filter table below</p>
         </div>
@@ -765,14 +547,14 @@ export default function SADashboard() {
                 <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
                     <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'var(--text-primary)' }}>Top Alarms</h3>
-                    <button ref={expandBtnRef} onClick={openGraphModal} style={{ background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: '#1a73e8', fontSize: '0.75rem', fontWeight: 'bold', cursor: 'pointer', padding: '5px 10px', borderRadius: '4px', outline: 'none' }}>Expand 📊</button>
+                    <button ref={expandBtnRef} onClick={openGraphModal} style={{ background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--color-info)', fontSize: '0.75rem', fontWeight: 'bold', cursor: 'pointer', padding: '5px 10px', borderRadius: '4px', outline: 'none' }}>Expand 📊</button>
                   </div>
                   <div className="custom-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto', overflowX: 'hidden', paddingRight: '5px' }}>
                     {alarmStats.map((stat, i) => ( 
                       <div key={i} style={{ width: '100%', background: 'var(--bg-primary)', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', boxSizing: 'border-box' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '6px', fontWeight: 'bold' }}>
                           <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', width: '80%', color: 'var(--text-primary)' }}>{stat.name}</span>
-                          <span style={{ color: '#f02849' }}>{stat.count}</span>
+                          <span style={{ color: 'var(--color-danger)' }}>{stat.count}</span>
                         </div>
                         <div style={{ width: '100%', height: '6px', background: 'var(--bg-input)', borderRadius: '3px', overflow: 'hidden' }}>
                           <div style={{ height: '100%', width: `${stat.percentage}%`, background: 'var(--brand-gradient)', borderRadius: '3px', transition: 'width 1s ease-out' }}></div>
@@ -787,19 +569,19 @@ export default function SADashboard() {
                 <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
                   <h3 style={{ margin: 0, marginBottom: '20px', fontSize: '1.1rem', color: 'var(--text-primary)' }}>Alert Breakdown</h3>
                   <div className="details-content custom-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                    <div style={{ background: 'var(--bg-primary)', padding: '15px', borderRadius: '8px', border: '1px solid var(--border-light)', borderLeft: '4px solid #f02849' }}>
+                    <div style={{ background: 'var(--bg-primary)', padding: '15px', borderRadius: '8px', border: '1px solid var(--border-light)', borderLeft: '4px solid var(--color-danger)' }}>
                       <span className="input-label" style={{ fontSize: '0.75rem' }}>Alert Count</span>
-                      <div style={{ fontSize: '1.8rem', fontWeight: 'bold', color: '#f02849', marginTop: '5px' }}>{selectedRowDetails.count} <span style={{fontSize: '0.9rem', color: 'var(--text-secondary)'}}>Repetitions</span></div>
+                      <div style={{ fontSize: '1.8rem', fontWeight: 'bold', color: 'var(--color-danger)', marginTop: '5px' }}>{selectedRowDetails.count} <span style={{fontSize: '0.9rem', color: 'var(--text-secondary)'}}>Repetitions</span></div>
                     </div>
                     <div style={{ background: 'var(--bg-primary)', padding: '15px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
                       <span className="input-label" style={{ fontSize: '0.75rem' }}>{dashboardMode === 'wireless' ? 'PLA_ID' : 'SEVERITY'}</span>
-                      <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: dashboardMode === 'transport' ? '#f02849' : 'var(--text-primary)', marginTop: '5px' }}>
+                      <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: 'var(--text-primary)', marginTop: '5px' }}>
                         {selectedRowDetails.pla}
                       </div>
                     </div>
                     <div style={{ background: 'var(--bg-primary)', padding: '15px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
                       <span className="input-label" style={{ fontSize: '0.75rem' }}>Site Name</span>
-                      <div style={{ fontWeight: 'bold', marginTop: '5px', wordBreak: 'break-word', color: '#1a73e8', fontSize: '1rem' }}>
+                      <div style={{ fontWeight: 'bold', marginTop: '5px', wordBreak: 'break-word', color: 'var(--color-info)', fontSize: '1rem' }}>
                          {selectedRowDetails.name}
                       </div>
                     </div>
@@ -825,23 +607,23 @@ export default function SADashboard() {
           <div className="output-card" style={{ display: 'flex', flexDirection: 'column', height: '100%', transition: 'padding 0.4s ease' }}>
             <div className="table-toolbar" style={{ borderBottom: '1px solid var(--border-light)', background: 'var(--brand-purple)', color: 'white' }}>
                <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                  <button className="sidebar-toggle-btn" onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)} style={{ background: 'none', border: 'none', outline: 'none', color: '#ffffff', cursor: 'pointer', padding: '4px' }}>
+                  <button className="sidebar-toggle-btn" onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)} style={{ background: 'none', border: 'none', outline: 'none', color: 'var(--text-primary)', cursor: 'pointer', padding: '4px' }}>
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ transition: 'transform 0.3s ease', transform: isSidebarCollapsed ? 'rotate(180deg)' : 'rotate(0deg)' }}><polyline points="15 18 9 12 15 6"></polyline></svg>
                   </button>
                   <img src={warningDark} alt="Alerts" style={{ width: '24px' }} />
-                  <h2 style={{ margin: 0, fontSize: '1.2rem', color: '#ffffff' }}>
+                  <h2 style={{ margin: 0, fontSize: '1.2rem', color: 'var(--text-inverse)' }}>
                     {dashboardMode === 'wireless' ? 'Wireless Critical Alerts' : 'Transport Critical Alerts'} ({filteredResults.length})
                   </h2>
                </div>
               {/* 🚀 FIXED: Search Bar text color adapts to Dark Mode */}
-              <input type="text" className="search-bar" placeholder="Search ID, Name, or Alarm..." value={searchTerm} onChange={(e) => startTransition(() => setSearchTerm(e.target.value))} disabled={results.length === 0} style={{ outline: 'none' }}/>
+              <input type="text" className="search-bar" placeholder="Search ID, Name, or Alarm..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} disabled={results.length === 0} style={{ outline: 'none' }}/>
             </div>
 
             <div className="output-box" style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
               <div className="table-wrapper" style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                <div style={{ display: 'flex', padding: '12px 35px 12px 20px', fontWeight: 'bold', borderBottom: '2px solid var(--border-color)', backgroundColor: 'var(--brand-purple)', textTransform: 'uppercase', fontSize: '0.8rem', color: '#ffffff' }}>
+                <div style={{ display: 'flex', padding: '12px 35px 12px 20px', fontWeight: 'bold', borderBottom: '2px solid var(--border-color)', backgroundColor: 'var(--btn-scan-bg)', textTransform: 'uppercase', fontSize: '0.8rem', color: 'var(--text-inverse)' }}>
                   <div style={{ width: '12%', paddingRight: '15px' }}>{dashboardMode === 'wireless' ? 'PLA_ID' : 'SEVERITY'}</div>
-                  <div style={{ width: '23%', paddingRight: '15px', color: '#ffffff' }}>Site Name</div>
+                  <div style={{ width: '23%', paddingRight: '15px', color: 'var(--text-inverse)' }}>Site Name</div>
                   <div style={{ width: '20%', paddingRight: '15px' }}>Alarm Text</div>
                   <div style={{ width: '37%', paddingRight: '15px' }}>{dashboardMode === 'wireless' ? 'Distinguished Name' : 'Location Info'}</div>
                   <div style={{ width: '8%', paddingRight: '15px', textAlign: 'center' }}>Count</div>
@@ -890,14 +672,14 @@ export default function SADashboard() {
                 <p style={{ margin: '5px 0 0 0', opacity: 0.9, fontSize: '0.9rem' }}>{drillDownData.alert}</p>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                <div style={{ background: 'white', color: isDarkMode ? '#1a1a1a' : '#f02849', padding: '5px 15px', borderRadius: '20px', fontWeight: 'bold' }}>{filteredModalRows.length} Occurrences</div>
+                <div style={{ background: 'white', color: isDarkMode ? 'var(--color-danger)' : 'var(--color-danger)', padding: '5px 15px', borderRadius: '20px', fontWeight: 'bold' }}>{filteredModalRows.length} Occurrences</div>
                 <button onClick={closeDrillDownModal} style={{ background: 'transparent', border: 'none', color: 'white', fontSize: '1.5rem', cursor: 'pointer', outline: 'none' }}>✕</button>
               </div>
             </div>
             
             <div style={{ padding: '15px 30px', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{fontWeight: 'bold', fontSize: '0.85rem', color: 'var(--text-secondary)'}}>RAW NMS DATA LOG (CLEANED)</span>
-              <input type="text" placeholder="Search raw logs..." value={modalSearchTerm} onChange={(e) => setModalSearchTerm(e.target.value)} style={{ padding: '8px 15px', borderRadius: '20px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: isDarkMode ? '#ffffff' : '#1a1a1a', width: '250px', outline: 'none' }} />
+              <input type="text" placeholder="Search raw logs..." value={modalSearchTerm} onChange={(e) => setModalSearchTerm(e.target.value)} style={{ padding: '8px 15px', borderRadius: '20px', border: '1px solid var(--border-color)', background: 'var(--bg-input)', color: 'var(--text-primary)', width: '250px', outline: 'none' }} />
             </div>
 
             <div style={{ flex: 1, padding: '20px 30px 0 30px', overflow: 'hidden' }}>
@@ -932,15 +714,15 @@ export default function SADashboard() {
                 </div>
                 <div style={{ background: 'var(--bg-input)', padding: '20px', borderRadius: '12px', border: '1px solid var(--border-light)', boxShadow: isDarkMode ? '0 4px 12px rgba(0,0,0,0.4)' : '0 4px 12px rgba(0,0,0,0.05)' }}>
                   <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', fontWeight: 'bold', textTransform: 'uppercase' }}>Unique Sites Affected</div>
-                  <div style={{ fontSize: '2.2rem', fontWeight: 'bold', color: '#1a73e8', marginTop: '5px' }}>{uniqueSitesCount}</div>
+                  <div style={{ fontSize: '2.2rem', fontWeight: 'bold', color: 'var(--color-info)', marginTop: '5px' }}>{uniqueSitesCount}</div>
                 </div>
                 <div style={{ background: 'var(--bg-input)', padding: '20px', borderRadius: '12px', border: '1px solid var(--border-light)', boxShadow: isDarkMode ? '0 4px 12px rgba(0,0,0,0.4)' : '0 4px 12px rgba(0,0,0,0.05)' }}>
                   <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', fontWeight: 'bold', textTransform: 'uppercase' }}>Unique Alarm Types</div>
-                  <div style={{ fontSize: '2.2rem', fontWeight: 'bold', color: '#00bfa5', marginTop: '5px' }}>{alarmStats.length}</div>
+                  <div style={{ fontSize: '2.2rem', fontWeight: 'bold', color: 'var(--brand-purple)', marginTop: '5px' }}>{alarmStats.length}</div>
                 </div>
-                <div style={{ background: 'var(--bg-input)', padding: '20px', borderRadius: '12px', border: '1px solid var(--border-light)', borderTop: '4px solid #f02849', boxShadow: isDarkMode ? '0 4px 12px rgba(0,0,0,0.4)' : '0 4px 12px rgba(0,0,0,0.05)' }}>
+                <div style={{ background: 'var(--bg-input)', padding: '20px', borderRadius: '12px', border: '1px solid var(--border-light)', borderTop: '4px solid var(--color-danger)', boxShadow: isDarkMode ? '0 4px 12px rgba(0,0,0,0.4)' : '0 4px 12px rgba(0,0,0,0.05)' }}>
                   <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', fontWeight: 'bold', textTransform: 'uppercase' }}>Most Critical Alarm</div>
-                  <div style={{ fontSize: '1rem', fontWeight: 'bold', color: '#f02849', marginTop: '10px', wordBreak: 'break-word', lineHeight: '1.2' }}>{alarmStats[0]?.name || "N/A"}</div>
+                  <div style={{ fontSize: '1rem', fontWeight: 'bold', color: 'var(--color-danger)', marginTop: '10px', wordBreak: 'break-word', lineHeight: '1.2' }}>{alarmStats[0]?.name || "N/A"}</div>
                 </div>
 
                 <div style={{ gridColumn: 'span 4', background: 'var(--bg-input)', padding: '20px', borderRadius: '12px', border: '1px solid var(--border-light)', display: 'flex', flexDirection: 'column', height: '320px', boxShadow: isDarkMode ? '0 4px 12px rgba(0,0,0,0.4)' : '0 4px 12px rgba(0,0,0,0.05)' }}>
@@ -996,7 +778,7 @@ export default function SADashboard() {
                   </div>
                   
                   <div className="custom-scrollbar" style={{ flex: 1, overflowY: 'auto' }}>
-                     <div style={{ display: 'flex', padding: '10px', fontWeight: 'bold', borderBottom: '2px solid var(--border-color)', color: '#ffffff', textTransform: 'uppercase', fontSize: '0.8rem', position: 'sticky', top: 0, background: isDarkMode ? '#0f2d61' : '#1a73e8', zIndex: 1 }}>
+                     <div style={{ display: 'flex', padding: '10px', fontWeight: 'bold', borderBottom: '2px solid var(--border-color)', color: 'var(--text-inverse)', textTransform: 'uppercase', fontSize: '0.8rem', position: 'sticky', top: 0, background: 'var(--btn-scan-bg)', zIndex: 1 }}>
                         <div style={{ width: '15%' }}>{dashboardMode === 'wireless' ? 'PLA_ID' : 'SEVERITY'}</div>
                         <div style={{ width: '25%' }}>Site Name</div>
                         <div style={{ width: '40%' }}>Alarm Text</div>
@@ -1004,16 +786,16 @@ export default function SADashboard() {
                      </div>
                      {topSitesData.map((row, idx) => (
                         <div key={idx} style={{ display: 'flex', padding: '12px 10px', borderBottom: '1px solid var(--border-light)', alignItems: 'center' }}>
-                           <div style={{ width: '15%', fontWeight: 'bold', color: dashboardMode === 'transport' ? '#f02849' : 'var(--text-primary)', fontSize: '0.85rem' }}>
+                           <div style={{ width: '15%', fontWeight: 'bold', color: dashboardMode === 'transport' ? 'var(--color-danger-light)' : 'var(--text-primary)', fontSize: '0.85rem' }}>
                              {row.pla}
                            </div>
-                           <div style={{ width: '25%', fontWeight: 'bold', color: '#1a73e8', fontSize: '0.85rem' }}>
+                           <div style={{ width: '25%', fontWeight: 'bold', color: 'var(--color-info)', fontSize: '0.85rem' }}>
                              {row.name}
                            </div>
                            <div style={{ width: '40%', fontSize: '0.8rem', color: 'var(--text-secondary)', paddingRight: '10px' }}>
                              {row.alert}
                            </div>
-                           <div style={{ width: '20%', fontWeight: 'bold', color: '#f02849', fontSize: '1rem', textAlign: 'center' }}>{row.count}</div>
+                           <div style={{ width: '20%', fontWeight: 'bold', color: 'var(--color-danger)', fontSize: '1rem', textAlign: 'center' }}>{row.count}</div>
                         </div>
                      ))}
                   </div>

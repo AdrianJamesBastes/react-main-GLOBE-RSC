@@ -1,5 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import useDarkMode from '../../hooks/useDarkMode';
+import useSearchDebounce from '../../hooks/useSearchDebounce';
 import AnalyticsDashboard from '../../Dashboard/AnalyticsDashboard';
 import MapVisualizer from '../../Map/MapVisualizer';
 import globeLogoDark from '../../assets/Globe_LogoW.png';
@@ -21,10 +22,9 @@ import fileLight from '../../assets/fileLight.png';
 import { useNavigate } from "react-router-dom";
 import { FixedSizeList as List } from 'react-window';
 
-import { parseLocationData, getShortRegionByProvince } from '../../utils/telecom';
-import { processCSVComparison as localProcessCSVComparison } from './SMLogic';
-import { cityToProvinceMap } from '../MapDictionary/TelecomDictionaries';
 import DashboardLayout from '../../components/DashboardLayout';
+import useStormMasterlistProcessor from '../../features/storm-masterlist/hooks/useStormMasterlistProcessor';
+import { exportStormMasterlist } from '../../features/storm-masterlist/services/stormMasterlistExport';
 import '../../styles/Dashboard_styles.css';
 import './SM_styles.css';
 
@@ -37,14 +37,18 @@ const ICONS = {
 export default function SMDashboard() {
   const [monitorFile1, setMonitorFile1] = useState(null);
   const [monitorFile2, setMonitorFile2] = useState(null);
-  const [isLoading, setIsLoading] = useState(false);
   const [results, setResults] = useState([]);
+  const [isNavigating, setIsNavigating] = useState(false);
 
   const navigate = useNavigate();
   const [isDarkMode, toggleTheme] = useDarkMode();
+  const { searchTerm, setSearchTerm } = useSearchDebounce();
+  const { isLoading, isAiLoading, scanFiles, runAiCommand } = useStormMasterlistProcessor();
+  const setIsAiLoading = () => {};
+  const pageIsLoading = isLoading || isNavigating;
+
   const [showPreviewMenu, setShowPreviewMenu] = useState(false);
   const [filterStatus, setFilterStatus] = useState('ALL');
-  const [searchTerm, setSearchTerm] = useState("");
 
   const [selectedSite, setSelectedSite] = useState({ lat: 7.05568, lng: 125.5469, zoom: 15 });
   const [showBigMap, setShowBigMap] = useState(false);
@@ -52,7 +56,6 @@ export default function SMDashboard() {
   const [selectedRowDetails, setSelectedRowDetails] = useState(null);
 
   const [aiCommand, setAiCommand] = useState("");
-  const [isAiLoading, setIsAiLoading] = useState(false);
   const [showAiPanel, setShowAiPanel] = useState(false); 
   
   const [chatHistory, setChatHistory] = useState([
@@ -61,6 +64,8 @@ export default function SMDashboard() {
   
   const chatContainerRef = useRef(null);
   const sidebarTopRef = useRef(null);
+
+  const currentLogo = isDarkMode ? globeLogoDark : globeLogoLight;
 
   useEffect(() => {
     if (sidebarTopRef.current) {
@@ -74,30 +79,27 @@ export default function SMDashboard() {
     }
   }, [chatHistory, isAiLoading, showAiPanel]);
 
-  const currentLogo = isDarkMode ? globeLogoDark : globeLogoLight;
-
   const handleFileChange = (e, setFileState) => {
     const file = e.target.files[0];
     if (file) setFileState(file);
   };
 
-  const readFileAsText = (file) => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = (evt) => resolve(evt.target.result);
-      reader.onerror = reject;
-      reader.readAsText(file);
-    });
-  };
-
-  const handleAiExecute = () => {
+  const handleAiExecute = async () => {
     if (!aiCommand.trim()) return;
     
     const userMessage = aiCommand.trim();
     setChatHistory(prev => [...prev, { sender: 'user', text: userMessage }]);
-    setAiCommand(""); 
-    setIsAiLoading(true);
-    
+    setAiCommand("");
+
+    const { messages, updatedResults } = await runAiCommand(userMessage, results);
+    if (updatedResults) {
+      setResults(updatedResults);
+    }
+    if (messages.length > 0) {
+      setChatHistory(prev => [...prev, ...messages]);
+    }
+    if (typeof window !== 'undefined' && window.__SM_LEGACY_AI_DEBUG__) {
+
     if (window.google && window.google.script) {
       
       const ignoreWords = [
@@ -196,130 +198,32 @@ export default function SMDashboard() {
         setChatHistory(prev => [...prev, { sender: 'ai', text: "I'm running locally. Google Apps Script is offline. 🔌" }]);
       }, 1000);
     }
+    }
   };
 
-  const handleSpecificExport = async (exportCategory) => {
+  const handleSpecificExport = (exportCategory) => {
     setShowExportMenu(false);
     if (results.length === 0) return alert("No data to export.");
 
-    const XLSX = await import('xlsx');
-
-    const dataToExport = exportCategory === 'ALL' 
-      ? results.filter(row => row.matchStatus !== 'REMOVED') 
-      : results.filter(row => row.matchStatus === exportCategory);
-
-    if (dataToExport.length === 0) return alert(`There are no "${exportCategory}" sites to export.`);
-
-    const exportStatusOrder = ['NEW', 'MISMATCH', 'REMOVED', 'UNCHANGED'];
-    
-    dataToExport.sort((a, b) => {
-      const orderA = exportStatusOrder.indexOf(a.matchStatus);
-      const orderB = exportStatusOrder.indexOf(b.matchStatus);
-      if (orderA !== orderB) return orderA - orderB;
-
-      const baseA = a.baseLocation || "";
-      const baseB = b.baseLocation || "";
-      return baseA.localeCompare(baseB, undefined, { numeric: true, sensitivity: 'base' });
-    });
-
-    const excelData = dataToExport.map(row => {
-      const geo = parseLocationData(row.baseLocation);
-      
-      let reg = getShortRegionByProvince(row.prov);
-      if (!reg && geo.province) reg = getShortRegionByProvince(geo.province);
-      if (!reg && row.mCity) {
-        const cleanCity = String(row.mCity).toUpperCase().trim();
-        const fallbackProv = cityToProvinceMap[cleanCity];
-        if (fallbackProv) reg = getShortRegionByProvince(fallbackProv);
-      }
-
-      return {
-        "Region": "MIN",
-        "PLA ID": row.plaId === "NEW_SITE" ? "" : (row.plaId || ""),
-        "PLA Status": "",
-        "Area": row.sArea || "",
-        "Region ": (row.region || geo.region || reg) || "",
-        "Province": (row.prov || geo.province) || "",
-        "Municipality": (row.mCity || geo.city) || "",
-        "Barangay": "",
-        "Site Address": row.sAdd || "",
-        "Longitude": row.lng || "",
-        "Latitude": row.lat || "",
-        "Technology": row.techGen || "UDM Only",            
-        "Tech Name/ BTS": row.nmsName || row.techName, 
-        "Tech Description": "",
-        "Tech Status": "",
-        "Site Owner": row.twrC || geo.siteCode || "GLOBE TELECOM",
-        "Territory": row.trt || "",
-        "Hiroshima Severity": row.hSvr || "",
-        "Remarks": row.remarks || "",
-        "Remarks Status": row.matchStatus || ""
-      };
-    });
-
-    const worksheet = XLSX.utils.json_to_sheet(excelData);
-    const headers = Object.keys(excelData[0]);
-    
-    const columnWidths = headers.map(header => {
-      let maxLength = header.length; 
-      excelData.forEach(row => {
-        const cellValue = row[header] ? row[header].toString() : "";
-        if (cellValue.length > maxLength) maxLength = cellValue.length;
-      });
-      return { wch: maxLength + 2 }; 
-    });
-
-    worksheet['!cols'] = columnWidths;
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Masterlist Data");
-    
-    const dateStr = new Date().toISOString().split('T')[0];
-    const fileName = `StormMasterlist_${exportCategory === 'ALL' ? 'Complete' : exportCategory}_${dateStr}.xlsx`;
-    
-    XLSX.writeFile(workbook, fileName);
+    try {
+      exportStormMasterlist(results, exportCategory);
+    } catch (error) {
+      alert(error.message || String(error));
+    }
   };
 
   const handleScan = async () => {
     if (!monitorFile1 || !monitorFile2) return alert("Please upload both CSV files.");
-    setIsLoading(true);
     setResults([]);
     setFilterStatus('ALL');
     setSelectedRowDetails(null);
-    setShowAiPanel(false); 
+    setShowAiPanel(false);
 
     try {
-      const text1 = await readFileAsText(monitorFile1);
-      const text2 = await readFileAsText(monitorFile2);
-
-      const sendInChunks = async (file1, file2) => {
-        if (window.google && window.google.script) {
-          return new Promise((resolve, reject) => {
-            window.google.script.run
-              .withSuccessHandler((resRaw) => {
-                const res = JSON.parse(resRaw);
-                if (res.success) resolve(res.data);
-                else reject(res.error);
-              })
-              .withFailureHandler(reject)
-              .processCSVComparison(file1, file2);
-          });
-        } else {
-          // Local JS fallback using SMLogic
-          const res = localProcessCSVComparison(file1, file2);
-          if (res && res.success) {
-            return res.data;
-          }
-          throw new Error(res ? res.error || 'Unknown parse error' : 'No response from local parser');
-        }
-      };
-
-
-      const data = await sendInChunks(text1, text2);
+      const data = await scanFiles(monitorFile1, monitorFile2);
       setResults(data);
-      setIsLoading(false);
     } catch (error) {
-      alert("Error: " + error);
-      setIsLoading(false);
+      alert("Error: " + (error.message || error));
     }
   };
 
@@ -379,7 +283,7 @@ export default function SMDashboard() {
   };
 
   const handleNavigate = (path) => {
-    setIsLoading(true);
+    setIsNavigating(true);
     setTimeout(() => {
       navigate(path);
     }, 1000); 
@@ -446,10 +350,10 @@ export default function SMDashboard() {
         <div style={{ ...columnStyle, width: '20%', fontWeight: '500' }}>
           {isFirstOfGroup ? row.baseLocation : ""}
         </div>
-        <div style={{ ...columnStyle, width: '10%', fontWeight: 'bold', color: row.techGen?.includes('5G') ? '#28a745' : (row.techGen?.includes('4G') ? '#007bff' : '#666') }}>
+        <div style={{ ...columnStyle, width: '10%', fontWeight: 'bold', color: row.techGen?.includes('5G') ? 'var(--color-success)' : (row.techGen?.includes('4G') ? 'var(--color-info)' : 'var(--text-secondary)') }}>
           {row.techGen}
         </div>
-        <div style={{ ...columnStyle, width: '25%', fontFamily: 'monospace', color: '#1a73e8', fontWeight: 'bold' }}>
+        <div style={{ ...columnStyle, width: '25%', fontFamily: 'monospace', color: 'var(--color-info)', fontWeight: 'bold' }}>
           {row.nmsName}
         </div>
         <div style={{ ...columnStyle, width: '25%', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
@@ -508,7 +412,7 @@ export default function SMDashboard() {
 
   return (
     <DashboardLayout
-      isLoading={isLoading}
+      isLoading={pageIsLoading}
       logo={currentLogo}
       onLogoClick={() => handleNavigate("/")}
       headerActions={headerActions}
@@ -809,8 +713,8 @@ export default function SMDashboard() {
                     <div style={{ width: '10%', paddingRight: '15px', boxSizing: 'border-box' }}>PLA_ID</div>
                     <div style={{ width: '10%', paddingRight: '15px', boxSizing: 'border-box' }}>Status</div>
                     <div style={{ width: '20%', paddingRight: '15px', boxSizing: 'border-box' }}>Base Name</div>
-                    <div style={{ width: '10%', color: '#1a73e8', paddingRight: '15px', boxSizing: 'border-box' }}>Tech</div>
-                    <div style={{ width: '25%', color: '#1a73e8', paddingRight: '15px', boxSizing: 'border-box' }}>BCF NAME</div>
+                    <div style={{ width: '10%', color: 'var(--color-info)', paddingRight: '15px', boxSizing: 'border-box' }}>Tech</div>
+                    <div style={{ width: '25%', color: 'var(--color-info)', paddingRight: '15px', boxSizing: 'border-box' }}>BCF NAME</div>
                     <div style={{ width: '25%', paddingRight: '15px', boxSizing: 'border-box' }}>Remarks</div>
                   </div>
                   
