@@ -288,7 +288,7 @@ body.dark-mode .details-header {
 .search-bar {
   padding: 10px 20px;
   border: 1px solid transparent;
-  background-color: var(--bg-input) !important;
+  background-color: white !important;
   color: var(--text-primary);
   border-radius: 20px;
   font-size: 0.9rem;
@@ -310,7 +310,21 @@ body.dark-mode .details-header {
   justify-content: space-between;
   align-items: center;
   padding: 1.5rem 2rem;
-  background-color: transparent;
+  background-color: var(--brand-gradient);
+  color: var(--text-primary);
+}
+
+.table-toolbar h2, .table-toolbar .search-bar, .table-toolbar button {
+  color: black;
+}
+
+body.dark-mode .table-toolbar {
+  background-color: var(--bg-card);
+  color: var(--text-inverse);
+}
+
+body.dark-mode .table-toolbar h2, .table-toolbar button, .table-toolbar .search-bar {
+  color: var(--text-inverse);
 }
 
 .output-box {
@@ -318,6 +332,7 @@ body.dark-mode .details-header {
   flex: 1;
   overflow: hidden;
   position: relative;
+  color: #8f8989;
 }
 
 .table-wrapper {
@@ -450,6 +465,7 @@ body.dark-mode .active-row {
   display: flex;
   justify-content: center;
   gap: 10px;
+  background-color: var(--brand-purple) !important;
 }
 
 .btn-icon {
@@ -478,6 +494,19 @@ body.dark-mode .active-row {
   transform: translateY(-1px);
 }
 
+body.dark-mode .primary-filled {
+  background: linear-gradient(135deg, rgba(108, 213, 255, 1) 0%, rgba(37, 117, 252, 1) 100%);
+  border: 1px solid rgba(41, 155, 255, 0.8);
+  box-shadow: 0 4px 16px rgba(41, 155, 255, 0.4);
+  color: #ffffff;
+}
+
+body.dark-mode .scan-btn {
+  box-shadow: 0 5px 20px rgba(0, 123, 255, 0.35);
+  outline: rgb(100, 97, 97) solid 1px;
+  background-color: var(--brand-purple) !important;
+}
+
 .primary-filled:disabled {
   background: var(--text-secondary);
   box-shadow: none;
@@ -503,6 +532,13 @@ body.dark-mode .btn {
   border: 1px solid rgba(255, 255, 255, 0.1);
   box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
 }
+
+body.dark-mode .search-bar {
+  color: black;
+  border-color: var(--border-light);
+  background: white !important;
+}
+
 
 body.dark-mode .primary-filled {
   box-shadow: 0 4px 15px rgba(112, 51, 255, 0.5);

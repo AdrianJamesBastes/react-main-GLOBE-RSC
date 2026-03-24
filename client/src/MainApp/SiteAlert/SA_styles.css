@@ -10,6 +10,10 @@
     color: var(--text-primary); /* use theme colors */
 }
 
+body.dark-mode .sadashboard {
+    color: #ffffff;
+}
+
 .scan-btn {
     /* push the button slightly below the upload box instead of huge bottom gap */
     margin-top: 1.5rem;
@@ -19,6 +23,7 @@
     display: flex;
     justify-content: center;
     gap: 10px;
+    background-color: #1a73e8 !important;
 }
 
 .btn-icon {
@@ -31,6 +36,45 @@
 .scan-btn:hover .btn-icon {
     transform: scale(1.1);
     transition: transform 0.2s ease;
+}
+
+body.dark-mode .scan-btn {
+    background-color: #0f2d61 !important;
+}
+
+.search-bar {
+  padding: 10px 20px;
+  border: 1px solid transparent;
+  background-color: var(--bg-input) !important;
+  color: var(--text-primary);
+  border-radius: 20px;
+  font-size: 0.9rem;
+  width: 250px;
+  outline: none;
+  transition: all 0.2s;
+}
+
+.table-toolbar .search-bar {
+  color: var(--text-primary);
+  border-color: var(--border-light);
+  background-color: var(--bg-input);
+}
+
+body.dark-mode .table-toolbar .search-bar {
+  color: var(--text-primary);
+  background-color: var(--bg-input);
+  border-color: var(--border-light);
+}
+
+.search-bar:focus {
+  border-color: var(--brand-purple);
+  box-shadow: 0 0 0 3px rgba(112, 51, 255, 0.15);
+}
+
+body.dark-mode .search-bar {
+  background-color: var(--bg-input);
+  color: var(--text-primary);
+  border-color: var(--border-light);
 }
 
 .primary-filled {

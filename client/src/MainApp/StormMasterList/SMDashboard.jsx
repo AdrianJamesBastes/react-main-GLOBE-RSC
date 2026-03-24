@@ -414,7 +414,7 @@ export default function SMDashboard() {
       cursor: "pointer", 
       transition: "background-color 0.2s",
       borderBottom: isLastOfGroup ? "2px solid var(--border-color)" : "1px solid rgba(128,128,128,0.1)",
-      backgroundColor: isExactRow ? "rgba(0, 123, 255, 0.2)" : (isSameGroup ? "rgba(128, 128, 128, 0.15)" : "transparent"),
+      backgroundColor: isExactRow ? "rgba(0, 123, 255, 0.2)" : (isSameGroup ? "rgba(128, 128, 128, 0.15)" : "var(--bg-input)"),
       boxSizing: 'border-box',
       fontSize: '0.85rem'
     };
@@ -757,14 +757,27 @@ export default function SMDashboard() {
                 onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setShowPreviewMenu(false); }} 
                 tabIndex={-1}
               >
-                <button 
-                  className="preview-toggle-btn" 
-                  onClick={() => setShowPreviewMenu(!showPreviewMenu)}
-                  disabled={results.length === 0}
-                  style={{ opacity: results.length === 0 ? 0.5 : 1, cursor: results.length === 0 ? 'not-allowed' : 'pointer' }}
-                >
-                  Preview Data: <span style={{fontWeight: 'bold', color: 'var(--brand-purple)'}}>{getPreviewLabel(filterStatus)}</span> 
-                </button>
+               <button 
+                          className="preview-toggle-btn" 
+                          onClick={() => setShowPreviewMenu(!showPreviewMenu)}
+                          disabled={results.length === 0}
+                          style={{ opacity: results.length === 0 ? 0.5 : 1, cursor: results.length === 0 ? 'not-allowed' : 'pointer', outline: 'none' }}
+                        >
+                          {/* 🚀 First Span: "Preview Data:" */}
+                          <span style={{ color: isDarkMode ? '#ffffff' : 'var(--text-primary)' }}>
+                            Preview Data: 
+                          </span> 
+                          
+                          {' '} {/* Adds a tiny space between the words */}
+
+                          {/* 🚀 Second Span: The Dynamic Label */}
+                          <span style={{ 
+                            fontWeight: 'bold', 
+                            color: isDarkMode ? '#ffffff' : 'var(--brand-purple)' 
+                          }}>
+                            {getPreviewLabel(filterStatus)}
+                          </span>
+                        </button>
 
                 {showPreviewMenu && (
                   <div className="preview-menu">
@@ -786,12 +799,12 @@ export default function SMDashboard() {
                 disabled={results.length === 0} 
                 style={{ 
                   opacity: results.length === 0 ? 0.5 : 1, 
-                  cursor: results.length === 0 ? 'not-allowed' : 'text' 
+                  cursor: results.length === 0 ? 'not-allowed' : 'text', 
                 }}
               />
             </div>
 
-            <div className="output-box" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+            <div className="output-box" style={{ flex: 1, display: 'flex', flexDirection: 'column', backgroundColor: 'var(--bg-primary)' }}>
               {results.length > 0 ? (
                 <div className="table-wrapper" style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
                   
@@ -826,10 +839,18 @@ export default function SMDashboard() {
                   
                 </div>
               ) : (
-                <div className="placeholder-container">
-                  <p className="placeholder-text" style={{ color: 'var(--text-secondary)', fontSize: '1.1rem' }}>
-                    Ready for Delta check. Please upload NMS and UDM CSV files.
-                  </p>
+                // 🚀 ENTERPRISE SKELETON LOADER FOR STORM MASTER LIST
+                <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
+                  {[...Array(8)].map((_, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', padding: '0 20px', height: '60px', borderBottom: "1px solid rgba(128,128,128,0.05)", boxSizing: 'border-box', opacity: 0.6 }}>
+                      <div style={{ width: '10%', paddingRight: '15px' }}><div style={{ height: '12px', width: '70%', background: 'var(--border-color)', borderRadius: '4px' }}></div></div>
+                      <div style={{ width: '10%', paddingRight: '15px' }}><div style={{ height: '12px', width: '60%', background: 'var(--border-color)', borderRadius: '4px' }}></div></div>
+                      <div style={{ width: '20%', paddingRight: '15px' }}><div style={{ height: '12px', width: '85%', background: 'var(--border-color)', borderRadius: '4px' }}></div></div>
+                      <div style={{ width: '10%', paddingRight: '15px' }}><div style={{ height: '12px', width: '50%', background: 'var(--border-color)', borderRadius: '4px' }}></div></div>
+                      <div style={{ width: '25%', paddingRight: '15px' }}><div style={{ height: '12px', width: '90%', background: 'var(--border-color)', borderRadius: '4px' }}></div></div>
+                      <div style={{ width: '25%', paddingRight: '15px' }}><div style={{ height: '12px', width: '95%', background: 'var(--border-color)', borderRadius: '4px' }}></div></div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

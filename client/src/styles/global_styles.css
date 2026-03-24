@@ -38,6 +38,10 @@
   color: var(--text-secondary);
 }
 
+body.dark-mode .input-label {
+  color: #ffffff;
+}
+
 .file-drop-area {
   margin-top: 20px;
   display: flex; 

@@ -13,6 +13,8 @@
   --bg-input: rgba(255, 255, 255, 0.6);
   --bg-hover: rgba(255, 255, 255, 0.8);
   --bg-active: #e8f0fe;
+  --bg-primary: rgba(255, 255, 255, 0.8);
+  --bg-secondary: rgba(255, 255, 255, 0.4);
   --overlay-bg: rgba(197, 201, 218, 0.8);
   --brand-purple: #7033ff;
   --brand-gradient: linear-gradient(135deg, #7033ff 0%, #a855f7 100%);
@@ -39,11 +41,13 @@ body.dark-mode {
   --bg-sidebar: #111c44;
   --bg-content: #0b1437;
   --bg-card: rgba(17, 28, 68, 0.4);
-  --bg-input: #111c44;
+  --bg-input: #1a2332;
   --bg-hover: #1b2559;
   --bg-active: #2b3674;
+  --bg-primary: #111c44;
+  --bg-secondary: #0b1437;
   --overlay-bg: rgba(11, 20, 55, 0.8);
-  --brand-purple: #8b5cf6;
+  --brand-purple: #22036b;
   --brand-gradient: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%);
   --text-primary: #ffffff;
   --text-secondary: #a3aed1;
