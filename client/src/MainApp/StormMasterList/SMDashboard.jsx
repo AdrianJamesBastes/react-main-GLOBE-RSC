@@ -22,6 +22,7 @@ import { useNavigate } from "react-router-dom";
 import { FixedSizeList as List } from 'react-window';
 
 import { parseLocationData, getShortRegionByProvince } from '../../utils/telecom';
+import { processCSVComparison as localProcessCSVComparison } from './SMLogic';
 import { cityToProvinceMap } from '../MapDictionary/TelecomDictionaries';
 import DashboardLayout from '../../components/DashboardLayout';
 import '../../styles/Dashboard_styles.css';
@@ -290,40 +291,28 @@ export default function SMDashboard() {
       const text1 = await readFileAsText(monitorFile1);
       const text2 = await readFileAsText(monitorFile2);
 
-      const sendInChunks = (file1, file2) => {
-        return new Promise((resolve, reject) => {
-          if (window.google && window.google.script) {
-             window.google.script.run
-               .withSuccessHandler((resRaw) => {
-                 const res = JSON.parse(resRaw);
-                 if (res.success) resolve(res.data);
-                 else reject(res.error);
-               })
-               .withFailureHandler(reject)
-               .processCSVComparison(file1, file2);
-          } else {
-             setTimeout(() => {
-               const mockData = [];
-               const statuses = ["NEW", "MISMATCH", "UNCHANGED", "REMOVED"];
-               for(let i=1; i<=50; i++) {
-                 mockData.push({ 
-                   plaId: `MIN_${String(i).padStart(4, '0')}`, 
-                   matchStatus: statuses[(i-1) % statuses.length], 
-                   techName: `SITENAME${i}DDN`, 
-                   baseLocation: `SITENAME${i}DDN`,
-                   techGen: "4G-FDD",
-                   nmsName: `SITENAME${i}DDNLYK`,
-                   remarks: "Mock data generated.",
-                   lat: (7.0 + (Math.random() * 0.5)).toFixed(5), 
-                   lng: (125.4 + (Math.random() * 0.5)).toFixed(5),
-                   sArea: "N/A", prov: "UNKNOWN", mCity: "UNKNOWN", sAdd: "N/A", trt: "N/A", hSvr: "N/A", twrC: "N/A"
-                 });
-               }
-               resolve(mockData);
-             }, 1000);
+      const sendInChunks = async (file1, file2) => {
+        if (window.google && window.google.script) {
+          return new Promise((resolve, reject) => {
+            window.google.script.run
+              .withSuccessHandler((resRaw) => {
+                const res = JSON.parse(resRaw);
+                if (res.success) resolve(res.data);
+                else reject(res.error);
+              })
+              .withFailureHandler(reject)
+              .processCSVComparison(file1, file2);
+          });
+        } else {
+          // Local JS fallback using SMLogic
+          const res = localProcessCSVComparison(file1, file2);
+          if (res && res.success) {
+            return res.data;
           }
-        });
+          throw new Error(res ? res.error || 'Unknown parse error' : 'No response from local parser');
+        }
       };
+
 
       const data = await sendInChunks(text1, text2);
       setResults(data);

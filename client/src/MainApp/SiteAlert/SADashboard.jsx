@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect, useRef, useTransition } from 'react';
 import useDarkMode from '../../hooks/useDarkMode';
 import globeLogoDark from '../../assets/Globe_LogoW.png';
 import globeLogoLight from '../../assets/Globe_LogoB.png';
@@ -230,6 +230,7 @@ export default function SADashboard() {
 
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [isPending, startTransition] = useTransition();
 
   const [drillDownData, setDrillDownData] = useState(null);
   const [modalSearchTerm, setModalSearchTerm] = useState(""); 
@@ -833,7 +834,7 @@ export default function SADashboard() {
                   </h2>
                </div>
               {/* 🚀 FIXED: Search Bar text color adapts to Dark Mode */}
-              <input type="text" className="search-bar" placeholder="Search ID, Name, or Alarm..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} disabled={results.length === 0} style={{ outline: 'none' }}/>
+              <input type="text" className="search-bar" placeholder="Search ID, Name, or Alarm..." value={searchTerm} onChange={(e) => startTransition(() => setSearchTerm(e.target.value))} disabled={results.length === 0} style={{ outline: 'none' }}/>
             </div>
 
             <div className="output-box" style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
