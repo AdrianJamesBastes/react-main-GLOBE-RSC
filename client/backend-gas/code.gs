@@ -1,339 +1,368 @@
 /**
- * Project: Globe RSC Network Delta Engine
- * Version: Flat Unpivoted Output + BCF Macro Logic + Geo-Inference
+ * Globe RSC Network Delta Engine - Backend API
+ * Google Apps Script backend with Google Sheets integration
  */
 
-// --- 1. THE "FRONT DOOR" ---
+// --- CONFIGURATION ---
+const CONFIG = {
+  SPREADSHEET_ID: 'YOUR_ACTUAL_GOOGLE_SHEET_ID_HERE', // ← Replace this with your Sheet ID
+  DATA_SHEET_NAME: 'UploadedData',
+  USERS_SHEET_NAME: 'Users',
+  LAST_MODIFIED_SHEET_NAME: 'LastModified'
+};
+
+// --- OAUTH & AUTHENTICATION ---
+function getUserInfo() {
+  try {
+    const user = Session.getActiveUser();
+    const email = user.getEmail();
+    return {
+      success: true,
+      data: {
+        email: email,
+        name: user.getUserLoginId(),
+        isAuthenticated: true
+      }
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: 'Authentication failed: ' + error.message
+    };
+  }
+}
+
+// --- GOOGLE SHEETS DATABASE FUNCTIONS ---
+
+/**
+ * Initialize the spreadsheet with required sheets
+ */
+function initializeSpreadsheet() {
+  try {
+    const spreadsheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+
+    // Create data sheet if it doesn't exist
+    let dataSheet = spreadsheet.getSheetByName(CONFIG.DATA_SHEET_NAME);
+    if (!dataSheet) {
+      dataSheet = spreadsheet.insertSheet(CONFIG.DATA_SHEET_NAME);
+      // Add headers
+      dataSheet.appendRow([
+        'id', 'userEmail', 'uploadDate', 'fileName', 'dataType',
+        'rawData', 'processedData', 'metadata'
+      ]);
+    }
+
+    // Create users sheet if it doesn't exist
+    let usersSheet = spreadsheet.getSheetByName(CONFIG.USERS_SHEET_NAME);
+    if (!usersSheet) {
+      usersSheet = spreadsheet.insertSheet(CONFIG.USERS_SHEET_NAME);
+      usersSheet.appendRow(['email', 'name', 'lastAccess', 'uploadCount']);
+    }
+
+    // Create last modified sheet if it doesn't exist
+    let lastModifiedSheet = spreadsheet.getSheetByName(CONFIG.LAST_MODIFIED_SHEET_NAME);
+    if (!lastModifiedSheet) {
+      lastModifiedSheet = spreadsheet.insertSheet(CONFIG.LAST_MODIFIED_SHEET_NAME);
+      lastModifiedSheet.appendRow(['timestamp', 'userEmail', 'userName', 'action', 'fileName', 'dataType', 'details']);
+    }
+
+    return { success: true, message: 'Spreadsheet initialized successfully' };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Store uploaded data in Google Sheets
+ */
+function storeUploadedData(fileName, dataType, rawData, processedData, metadata) {
+  try {
+    const userInfo = getUserInfo();
+    if (!userInfo.success) {
+      return userInfo;
+    }
+
+    const spreadsheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+    const sheet = spreadsheet.getSheetByName(CONFIG.DATA_SHEET_NAME);
+
+    const id = Utilities.getUuid();
+    const uploadDate = new Date().toISOString();
+
+    // Prepare data for storage
+    const rowData = [
+      id,
+      userInfo.data.email,
+      uploadDate,
+      fileName,
+      dataType,
+      JSON.stringify(rawData),
+      JSON.stringify(processedData || {}),
+      JSON.stringify(metadata || {})
+    ];
+
+    sheet.appendRow(rowData);
+
+    // Update user stats
+    updateUserStats(userInfo.data.email, userInfo.data.name);
+
+    // Update last modified info
+    updateLastModified(userInfo.data.email, userInfo.data.name, fileName, dataType, 'upload', `Processed ${rawData.length} records`);
+
+    return {
+      success: true,
+      data: {
+        id: id,
+        message: 'Data stored successfully'
+      }
+    };
+  } catch (error) {
+    return { success: false, error: 'Failed to store data: ' + error.message };
+  }
+}
+
+/**
+ * Retrieve user's uploaded data
+ */
+function getUserUploadedData(limit = 50) {
+  try {
+    const userInfo = getUserInfo();
+    if (!userInfo.success) {
+      return userInfo;
+    }
+
+    const spreadsheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+    const sheet = spreadsheet.getSheetByName(CONFIG.DATA_SHEET_NAME);
+
+    const data = sheet.getDataRange().getValues();
+
+    if (data.length <= 1) {
+      return { success: true, data: [] };
+    }
+
+    // Filter by user email and sort by upload date (newest first)
+    const userData = data.slice(1)
+      .filter(row => row[1] === userInfo.data.email) // email column
+      .sort((a, b) => new Date(b[2]) - new Date(a[2])) // upload date column
+      .slice(0, limit)
+      .map(row => ({
+        id: row[0],
+        userEmail: row[1],
+        uploadDate: row[2],
+        fileName: row[3],
+        dataType: row[4],
+        rawData: JSON.parse(row[5] || '[]'),
+        processedData: JSON.parse(row[6] || '{}'),
+        metadata: JSON.parse(row[7] || '{}')
+      }));
+
+    return { success: true, data: userData };
+  } catch (error) {
+    return { success: false, error: 'Failed to retrieve data: ' + error.message };
+  }
+}
+
+/**
+ * Update user statistics
+ */
+function updateUserStats(email, name) {
+  try {
+    const spreadsheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+    const sheet = spreadsheet.getSheetByName(CONFIG.USERS_SHEET_NAME);
+    const data = sheet.getDataRange().getValues();
+
+    let userRowIndex = -1;
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][0] === email) {
+        userRowIndex = i + 1; // +1 because sheet rows are 1-indexed
+        break;
+      }
+    }
+
+    const now = new Date().toISOString();
+
+    if (userRowIndex === -1) {
+      // New user
+      sheet.appendRow([email, name, now, 1]);
+    } else {
+      // Existing user - update last access and increment count
+      const currentCount = data[userRowIndex - 1][3] || 0;
+      sheet.getRange(userRowIndex, 3).setValue(now); // last access
+      sheet.getRange(userRowIndex, 4).setValue(currentCount + 1); // upload count
+    }
+  } catch (error) {
+    Logger.log('Failed to update user stats: ' + error.message);
+  }
+}
+
+/**
+ * Update last modified tracking
+ */
+function updateLastModified(email, name, fileName, dataType, action = 'upload', details = '') {
+  try {
+    const spreadsheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+    const sheet = spreadsheet.getSheetByName(CONFIG.LAST_MODIFIED_SHEET_NAME);
+
+    const timestamp = new Date().toISOString();
+    const rowData = [
+      timestamp,
+      email,
+      name,
+      action,
+      fileName,
+      dataType,
+      details
+    ];
+
+    sheet.appendRow(rowData);
+  } catch (error) {
+    Logger.log('Failed to update last modified: ' + error.message);
+  }
+}
+
+/**
+ * Get last modified information
+ */
+function getLastModifiedInfo() {
+  try {
+    const spreadsheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+    const sheet = spreadsheet.getSheetByName(CONFIG.LAST_MODIFIED_SHEET_NAME);
+    const data = sheet.getDataRange().getValues();
+
+    if (data.length <= 1) {
+      return { success: true, data: null };
+    }
+
+    // Get the most recent entry
+    const lastEntry = data[data.length - 1];
+    return {
+      success: true,
+      data: {
+        timestamp: lastEntry[0],
+        userEmail: lastEntry[1],
+        userName: lastEntry[2],
+        action: lastEntry[3],
+        fileName: lastEntry[4],
+        dataType: lastEntry[5],
+        details: lastEntry[6]
+      }
+    };
+  } catch (error) {
+    return { success: false, error: 'Failed to get last modified info: ' + error.message };
+  }
+}
+
+/**
+ * Delete specific uploaded data
+ */
+function deleteUploadedData(dataId) {
+  try {
+    const userInfo = getUserInfo();
+    if (!userInfo.success) {
+      return userInfo;
+    }
+
+    const spreadsheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+    const sheet = spreadsheet.getSheetByName(CONFIG.DATA_SHEET_NAME);
+    const data = sheet.getDataRange().getValues();
+
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][0] === dataId && data[i][1] === userInfo.data.email) {
+        sheet.deleteRow(i + 1);
+        return { success: true, message: 'Data deleted successfully' };
+      }
+    }
+
+    return { success: false, error: 'Data not found or access denied' };
+  } catch (error) {
+    return { success: false, error: 'Failed to delete data: ' + error.message };
+  }
+}
+
+// --- WEB APP ENDPOINTS ---
+
+/**
+ * Main web app entry point
+ */
 function doGet(e) {
   return HtmlService.createHtmlOutputFromFile('index')
-    .setTitle('Globe RSC')
+    .setTitle('Globe RSC Data Manager')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 
-// --- 2. GLOBAL HELPER FUNCTIONS ---
-
-function extractBaseAndSuffix(nmsString) {
-  if (!nmsString) return { cleanBase: "", displayBase: "", suffix: "", suffixSet: new Set() };
-  
-  let originalStr = String(nmsString).toUpperCase().trim();
-  let displayBase = originalStr;
-  let suffixLetters = "";
-
-  const anchors = [
-    "DDS", "AGUSAN", "AGUADA", "AFGA", "CDO", "DVO", "DDN", "DDO", "DVOR", "DVOC", "KUD", "MOR", "MISOCC",
-    "CVLY", "NCOT", "SCOT", "MGDN", "LDN", "LDS", "BUK", "ZDS", "ZDN", "MISOR", "MOCC", "SDN", "SDS", "AGS", "AGN", "SAR", "COT",
-    "MKLALA", "PANABO", "TAGUM", "DIGOS", "GENSAN", "ZAMBOA", "POLOMO", "MRAMAG", "KIDAP", "COTAB", "MATI", "GINGOO", "DIPOL", "OZAMIS", "OZM", "ILIGAN", "MARAWI", "BUTUAN", "CARMEN", "STOMAS", "KPALON", "SAMAL", "PANTUK", "MACO", "MALITA", "BANSAL", "PADADA", "SULOP", "SMARIA", "GLAN", "ALABEL", "MALAPAT", "SFRANC", "MIDSAY", "SFERN", "PGDIAN", "MFORT", "TACUROS", "BISLIG", "CLAVER", "BAYABS", "DAVAO",
-    // VIP Protected Bases
-    "TRNSCOZ", "TRNSCO", "BASCOW", "BAS"
-  ];
-
-  let matched = false;
-
-  for (const anchor of anchors) {
-    let idx = originalStr.lastIndexOf(anchor);
-    if (idx !== -1) {
-      let potentialSuffix = originalStr.slice(idx + anchor.length);
-      let suffixTest = potentialSuffix.match(/^([-_ ]*)((?:ID|AS|[XYLFWKHVZJBMNPRTD])*)$/i);
-
-      if (suffixTest && suffixTest[0] === potentialSuffix) {
-        let separator = suffixTest[1]; 
-        let actualSuffix = suffixTest[2]; 
-        displayBase = originalStr.slice(0, idx + anchor.length) + separator; 
-        suffixLetters = actualSuffix;
-        matched = true;
-        break;
-      }
-    }
-  }
-
-  if (!matched) {
-    let fallbackMatch = originalStr.match(/([-_ ]*)((?:ID|AS|[XYLFWKHVZJBMNPRTD])+)$/i);
-    if (fallbackMatch) {
-      let separator = fallbackMatch[1];
-      let actualSuffix = fallbackMatch[2];
-      displayBase = originalStr.slice(0, -fallbackMatch[0].length) + separator;
-      suffixLetters = actualSuffix;
-    }
-  }
-
-  let cleanBase = displayBase.replace(/[^A-Z0-9]/g, "");
-  
-  return { 
-    cleanBase: cleanBase, 
-    displayBase: displayBase, 
-    suffix: suffixLetters,
-    suffixSet: new Set(suffixLetters.split('')) 
-  };
-}
-
-function getIndex(headers, possibleNames) {
-  for (var i = 0; i < headers.length; i++) {
-    var h = String(headers[i]).trim().toUpperCase();
-    if (possibleNames.indexOf(h) > -1) return i;
-  }
-  return -1;
-}
-
-function getCoords(row, latIdx, lngIdx) {
-  return {
-    lat: latIdx > -1 && row[latIdx] ? row[latIdx] : 7.1905,
-    lng: lngIdx > -1 && row[lngIdx] ? row[lngIdx] : 125.4503
-  };
-}
-
-function inferLocation(baseName) {
-  var name = String(baseName).toUpperCase();
-  var result = { city: "", prov: "", area: "" };
-
-  var geoMap = [
-    { keys: ["PANABO", "TADECO"], city: "PANABO CITY", prov: "DAVAO DEL NORTE" },
-    { keys: ["SAMAL", "IGACOS"], city: "ISLAND GARDEN CITY OF SAMAL", prov: "DAVAO DEL NORTE" },
-    { keys: ["TAGUM"], city: "TAGUM CITY", prov: "DAVAO DEL NORTE" },
-    { keys: ["CARMEN"], city: "CARMEN", prov: "DAVAO DEL NORTE" },
-    { keys: ["DAVAO", "DVO", "ULAS"], city: "DAVAO CITY", prov: "DAVAO DEL SUR" },
-    { keys: ["DIGOS", "DDS"], city: "DIGOS CITY", prov: "DAVAO DEL SUR" },
-    { keys: ["MATI", "DVOR"], city: "MATI CITY", prov: "DAVAO ORIENTAL" },
-    { keys: ["KIDAPAWAN", "KIDAP"], city: "KIDAPAWAN CITY", prov: "NORTH COTABATO" },
-    { keys: ["COTABATO", "COTAB"], city: "COTABATO CITY", prov: "MAGUINDANAO DEL NORTE" },
-    { keys: ["ZAMBOANGA", "ZAMBOA"], city: "ZAMBOANGA CITY", prov: "ZAMBOANGA DEL SUR" },
-    { keys: ["GENSAN", "GSC"], city: "GENERAL SANTOS CITY", prov: "SOUTH COTABATO" },
-    { keys: ["CDO", "CAGAYAN"], city: "CAGAYAN DE ORO CITY", prov: "MISAMIS ORIENTAL" }
-  ];
-
-  for (var i = 0; i < geoMap.length; i++) {
-    for (var j = 0; j < geoMap[i].keys.length; j++) {
-      if (name.includes(geoMap[i].keys[j])) {
-        result.city = geoMap[i].city;
-        result.prov = geoMap[i].prov;
-        return result;
-      }
-    }
-  }
-  return result;
-}
-
-function generateSpecificTechLabel(baseGen, suffixStr) {
-  var str = String(suffixStr).toUpperCase();
-  var label = baseGen;
-  
-  if (baseGen === "4G") {
-    var types = [];
-    if (/[FLWY]/.test(str)) types.push("");
-    if (/H/.test(str)) types.push("");
-    if (/V/.test(str)) types.push("");
-    if (types.length > 0) label = "4G" + types.join("");
-  } else if (baseGen === "5G") {
-    var types = [];
-    if (/M/.test(str)) types.push("");
-    if (/[PN]/.test(str)) types.push("");
-    if (types.length > 0) label = "5G" + types.join("");
-  }
-  return label;
-}
-
-// --- 3. THE ETL LOGIC (Main Processor) ---
-function processCSVComparison(nmsText, udmText) {
+/**
+ * Handle POST requests for API calls
+ */
+function doPost(e) {
   try {
-    var nmsData = Utilities.parseCsv(nmsText);
-    var udmData = Utilities.parseCsv(udmText);
-    
-    if (nmsData.length < 2 || udmData.length < 2) {
-      throw new Error("File(s) empty.");
+    const data = JSON.parse(e.postData.contents);
+    const action = data.action;
+
+    switch (action) {
+      case 'storeData':
+        return ContentService
+          .createTextOutput(JSON.stringify(storeUploadedData(
+            data.fileName,
+            data.dataType,
+            data.rawData,
+            data.processedData,
+            data.metadata
+          )))
+          .setMimeType(ContentService.MimeType.JSON);
+
+      case 'getData':
+        return ContentService
+          .createTextOutput(JSON.stringify(getUserUploadedData(data.limit)))
+          .setMimeType(ContentService.MimeType.JSON);
+
+      case 'deleteData':
+        return ContentService
+          .createTextOutput(JSON.stringify(deleteUploadedData(data.dataId)))
+          .setMimeType(ContentService.MimeType.JSON);
+
+      case 'getUserInfo':
+        return ContentService
+          .createTextOutput(JSON.stringify(getUserInfo()))
+          .setMimeType(ContentService.MimeType.JSON);
+
+      case 'initialize':
+        return ContentService
+          .createTextOutput(JSON.stringify(initializeSpreadsheet()))
+          .setMimeType(ContentService.MimeType.JSON);
+
+      case 'getLastModified':
+        return ContentService
+          .createTextOutput(JSON.stringify(getLastModifiedInfo()))
+          .setMimeType(ContentService.MimeType.JSON);
+
+      default:
+        return ContentService
+          .createTextOutput(JSON.stringify({
+            success: false,
+            error: 'Unknown action: ' + action
+          }))
+          .setMimeType(ContentService.MimeType.JSON);
     }
-    
-    var nmsHeaders = nmsData[0];
-    var udmHeaders = udmData[0];
-
-    var udmNameIdx = getIndex(udmHeaders, ['BCF NAME']);
-    var udmIdIdx = getIndex(udmHeaders, ['PLA_ID', 'PLA ID']);
-    var udmLatIdx = getIndex(udmHeaders, ['LATITUDE', 'LAT']);
-    var udmLngIdx = getIndex(udmHeaders, ['LONGITUDE', 'LONG']);
-    var udmSAreaIdx = getIndex(udmHeaders, ['ASSIGNED_AREA', 'ASSIGN_AREA', 'ASSIGN AREA', 'ASSIGNED AREA']);
-    var udmProIdx = getIndex(udmHeaders, ['PROVINCE']);
-    var udmMCtyIdx = getIndex(udmHeaders, ['ASSIGN_CITY/MUNICIPALITY']);
-    var udmSAddIdx = getIndex(udmHeaders, ['SITE_ADDRESS', 'SITE_ADD', 'SITE ADDRESS', 'SITE ADD' ]);
-    var udmTrtIdx = getIndex(udmHeaders, ['TERRITORY']);
-    var udmHSvrIdx = getIndex(udmHeaders, ['HIROSHIMA SEVERITY', 'HIROSHIMA_SEVERITY']);
-    var udmtwrCIdx = getIndex(udmHeaders, ['TOWERCO']);
-    
-    var nms2GNameIdx = getIndex(nmsHeaders, ['2G', 'NAME']);
-    var nms4GNameIdx = getIndex(nmsHeaders, ['4G', 'ENBNAME']);
-    var nms5GNameIdx = getIndex(nmsHeaders, ['5G', 'GNBCUNAME']);
-
-// --- A. Build the UDM Hash Map ---
-    var udmTable = {};
-    for (var j = 1; j < udmData.length; j++){
-      if (udmNameIdx === -1) continue;
-      
-      // THE FIX: The Phantom Row Destroyer
-      // If the entire CSV row is completely empty (caused by trailing newlines), skip it!
-      if (udmData[j].join("").replace(/,/g, "").trim() === "") continue;
-      
-      var rawName = String(udmData[j][udmNameIdx]);
-      var plaId = udmIdIdx > -1 ? String(udmData[j][udmIdIdx]).trim() : "UNKNOWN_ID_" + j;
-
-      // 1. Force uppercase and destroy hidden spaces
-      var cleanedName = rawName.toUpperCase().replace(/[\s\uFEFF\xA0]/g, ''); 
-      
-      // 2. The precise Kill List based on your data profile
-      var invalidValues = ["", "NA", "NONE", "NULL", "-"];
-      var isInvalidName = invalidValues.includes(cleanedName);
-      
-      // If invalid, assign a synthetic name so it gets caught as REMOVED
-      var originalUdmName = isInvalidName ? "UNNAMED_SITE_" + plaId : rawName.trim().toUpperCase();
-      
-      var parsedUdm = extractBaseAndSuffix(originalUdmName);
-      var sanitizedUdmKey = parsedUdm.cleanBase;
-      
-      var isDuplicateBase = false;
-      if (udmTable[sanitizedUdmKey]) {
-        sanitizedUdmKey = sanitizedUdmKey + "_DUPLICATE_" + j;
-        isDuplicateBase = true; // NEW: Set a flag
-      }
-      
-      var coords = getCoords(udmData[j], udmLatIdx, udmLngIdx);
-      
-      udmTable[sanitizedUdmKey] = {
-        plaId: plaId,
-        lat: coords.lat,
-        lng: coords.lng,
-        originalName: isInvalidName ? cleanedName || "BLANK" : originalUdmName, 
-        isGhostSite: isInvalidName, 
-        isDuplicate: isDuplicateBase, // NEW: Save the flag so Section D can see it
-        allowedSuffixSet: parsedUdm.suffixSet, 
-        sArea: udmSAreaIdx > -1 ? udmData[j][udmSAreaIdx] : "",
-        prov: udmProIdx > -1 ? String(udmData[j][udmProIdx]).trim().toUpperCase() : "",
-        mCity: udmMCtyIdx > -1 ? udmData[j][udmMCtyIdx] : "",
-        sAdd: udmSAddIdx > -1 ? udmData[j][udmSAddIdx] : "",
-        trt: udmTrtIdx > -1 ? udmData[j][udmTrtIdx] : "",
-        hSvr: udmHSvrIdx > -1 ? udmData[j][udmHSvrIdx] : "",
-        twrC: udmtwrCIdx > -1 ? udmData[j][udmtwrCIdx] : ""
-      };
-    }
-
-    // --- B. Synthesize NMS Masterlist ---
-    var siteGroups = {};
-
-    for (var j = 1; j < nmsData.length; j++){
-      var items = [
-        { name: nms2GNameIdx > -1 ? String(nmsData[j][nms2GNameIdx]).trim() : "", gen: "2G" },
-        { name: nms4GNameIdx > -1 ? String(nmsData[j][nms4GNameIdx]).trim() : "", gen: "4G" },
-        { name: nms5GNameIdx > -1 ? String(nmsData[j][nms5GNameIdx]).trim() : "", gen: "5G" }
-      ].filter(i => i.name !== "");
-
-      items.forEach(item => {
-        var parsed = extractBaseAndSuffix(item.name);
-        var bName = parsed.cleanBase; 
-        if (!bName) return;
-
-        if (!siteGroups[bName]) {
-          siteGroups[bName] = {
-            displayBase: parsed.displayBase,
-            suffixes: new Set(),
-            originalEntries: []
-          };
-        }
-        
-        siteGroups[bName].originalEntries.push({
-          rawName: item.name,
-          baseGen: item.gen,
-          suffix: parsed.suffix
-        });
-
-        for (let char of parsed.suffix) {
-          siteGroups[bName].suffixes.add(char.toUpperCase());
-        }
-      });
-    }
-
-    // --- C. Cross-Reference & UNPIVOT Output ---
-    var report = [];
-    var matchedUdmKeys = new Set();
-
-    for (var bName in siteGroups) {
-      var group = siteGroups[bName];
-      var udmRowMatch = udmTable[bName];
-
-      var status = "NEW";
-      var remarks = "Synthesized from NMS.";
-      var inferredLocation = udmRowMatch ? null : inferLocation(group.displayBase);
-
-      if (udmRowMatch) {
-        matchedUdmKeys.add(bName);
-        
-        var nmsSet = group.suffixes;
-        var udmSet = udmRowMatch.allowedSuffixSet;
-
-        var isSameSize = nmsSet.size === udmSet.size;
-        var hasAll = Array.from(nmsSet).every(char => udmSet.has(char));
-
-        if (isSameSize && hasAll) {
-          status = "UNCHANGED";
-          remarks = "Site BCF validated perfectly against UDM.";
-        } else {
-          status = "MISMATCH";
-          remarks = `BCF Mismatch: UDM expects [${udmRowMatch.originalName}].`;
-        }
-      }
-
-      group.originalEntries.forEach(entry => {
-        var specificTechLabel = generateSpecificTechLabel(entry.baseGen, entry.suffix);
-
-        report.push({
-          plaId: udmRowMatch ? udmRowMatch.plaId : "NEW_SITE",
-          matchStatus: status, 
-          techName: entry.rawName, 
-          baseLocation: group.displayBase,
-          techGen: specificTechLabel, 
-          nmsName: entry.rawName, 
-          lat: udmRowMatch ? udmRowMatch.lat : "",
-          lng: udmRowMatch ? udmRowMatch.lng : "",
-          sArea: udmRowMatch ? udmRowMatch.sArea : inferredLocation.area,
-          prov: udmRowMatch ? udmRowMatch.prov : inferredLocation.prov,
-          mCity: udmRowMatch ? udmRowMatch.mCity : inferredLocation.city,
-          sAdd: udmRowMatch ? udmRowMatch.sAdd : "",
-          trt: udmRowMatch ? udmRowMatch.trt : "",
-          hSvr: udmRowMatch ? udmRowMatch.hSvr : "",
-          twrC: udmRowMatch ? udmRowMatch.twrC : towerC(entry.rawName),
-          region: dict(udmRowMatch ? udmRowMatch.prov : inferredLocation.prov),
-          remarks: remarks
-        });
-      });
-    }
-
-    // --- D. Capture REMOVED Sites ---
-    for (var udmKey in udmTable) {
-      if (!matchedUdmKeys.has(udmKey)) {
-        var u = udmTable[udmKey];
-        
-        // THE FIX: If it's a ghost OR a duplicate, force the PLA_ID into the text!
-        var forceUnique = u.isGhostSite || u.isDuplicate;
-        var uniqueDisplayBase = forceUnique ? u.originalName + " (" + u.plaId + ")" : extractBaseAndSuffix(u.originalName).displayBase;
-        
-        report.push({
-          plaId: u.plaId, 
-          matchStatus: "REMOVED", 
-          techName: forceUnique ? uniqueDisplayBase : u.originalName, 
-          baseLocation: uniqueDisplayBase, 
-          techGen: "UDM Only", 
-          nmsName: forceUnique ? uniqueDisplayBase : u.originalName,
-          lat: u.lat, 
-          lng: u.lng, 
-          prov: u.prov, 
-          remarks: u.isGhostSite ? "UDM BCF Name was blank/missing." : (u.isDuplicate ? "CRITICAL: UDM Database Collision! Multiple PLA_IDs share this exact BCF Name." : "Site BCF found in UDM but missing from NMS."),
-          sArea: u.sArea, 
-          mCity: u.mCity, 
-          sAdd: u.sAdd, 
-          trt: u.trt, 
-          hSvr: u.hSvr, 
-          twrC: u.twrC
-        });
-      }
-    }
-
-    return JSON.stringify({ success: true, data: report, count: report.length });
-  } catch (e) {
-    return JSON.stringify({ success: false, error: e.toString() });
+  } catch (error) {
+    return ContentService
+      .createTextOutput(JSON.stringify({
+        success: false,
+        error: 'Request processing failed: ' + error.message
+      }))
+      .setMimeType(ContentService.MimeType.JSON);
   }
+}
+
+// --- UTILITY FUNCTIONS ---
+
+/**
+ * Test function for development
+ */
+function testConnection() {
+  return {
+    success: true,
+    message: 'Google Apps Script backend is connected',
+    timestamp: new Date().toISOString(),
+    spreadsheetId: CONFIG.SPREADSHEET_ID
+  };
 }

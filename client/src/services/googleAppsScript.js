@@ -1,10 +1,217 @@
+// UNIFIED DEPLOYMENT SUPPORT
+// When running in Google Apps Script (GAS HTML Service), use google.script.run
+// When running in development, use fetch() to the GAS API endpoint
+
+/**
+ * Get the google.script.run object if available (in GAS environment)
+ */
 function getGoogleScriptRunner() {
   return window.google?.script?.run || null;
 }
 
+/**
+ * Check if running in GAS environment
+ */
 export function hasGoogleScriptRuntime() {
   return Boolean(getGoogleScriptRunner());
 }
+
+/**
+ * Promisify google.script.run async calls
+ */
+function promisifyGasCall(functionName, ...args) {
+  const runner = getGoogleScriptRunner();
+  if (!runner) {
+    throw new Error('google.script.run is not available');
+  }
+  
+  return new Promise((resolve, reject) => {
+    runner.withSuccessHandler(resolve).withFailureHandler(reject)[functionName](...args);
+  });
+}
+
+// Development/fallback API endpoint (for non-GAS environments)
+// UPDATE THIS URL when you create a new GAS deployment
+const API_BASE_URL = 'https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec';
+
+/**
+ * Store uploaded data to Google Sheets
+ */
+export function storeUploadedData(fileName, dataType, rawData, processedData, metadata = {}) {
+  const runner = getGoogleScriptRunner();
+  
+  // If in GAS environment, use google.script.run
+  if (runner) {
+    return promisifyGasCall('storeUploadedData', fileName, dataType, rawData, processedData, metadata)
+      .then(result => {
+        if (!result.success) {
+          throw new Error(result.error || 'Failed to store data');
+        }
+        return result;
+      });
+  }
+  
+  // Otherwise, use fetch() for development
+  return fetch(API_BASE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'storeData',
+      fileName,
+      dataType,
+      rawData,
+      processedData,
+      metadata
+    })
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to store data');
+    }
+    return data;
+  });
+}
+
+/**
+ * Retrieve user's uploaded data from Google Sheets
+ */
+export function getUserUploadedData(limit = 20) {
+  const runner = getGoogleScriptRunner();
+  
+  // If in GAS environment, use google.script.run
+  if (runner) {
+    return promisifyGasCall('getUserUploadedData', limit)
+      .then(result => {
+        if (!result.success) {
+          throw new Error(result.error || 'Failed to retrieve data');
+        }
+        return result.data;
+      });
+  }
+  
+  // Otherwise, use fetch() for development
+  return fetch(API_BASE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'getData',
+      limit
+    })
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to retrieve data');
+    }
+    return data.data;
+  });
+}
+
+/**
+ * Delete specific uploaded data
+ */
+export function deleteUploadedData(dataId) {
+  const runner = getGoogleScriptRunner();
+  
+  // If in GAS environment, use google.script.run
+  if (runner) {
+    return promisifyGasCall('deleteUploadedData', dataId)
+      .then(result => {
+        if (!result.success) {
+          throw new Error(result.error || 'Failed to delete data');
+        }
+        return result;
+      });
+  }
+  
+  // Otherwise, use fetch() for development
+  return fetch(API_BASE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'deleteData',
+      dataId
+    })
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to delete data');
+    }
+    return data;
+  });
+}
+
+/**
+ * Get current user information
+ */
+export function getUserInfo() {
+  const runner = getGoogleScriptRunner();
+  
+  // If in GAS environment, use google.script.run
+  if (runner) {
+    return promisifyGasCall('getUserInfo')
+      .then(result => {
+        if (!result.success) {
+          throw new Error(result.error || 'Failed to get user info');
+        }
+        return result.data;
+      });
+  }
+  
+  // Otherwise, use fetch() for development
+  return fetch(API_BASE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'getUserInfo'
+    })
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to get user info');
+    }
+    return data.data;
+  });
+}
+
+/**
+ * Get last modified information
+ */
+export function getLastModifiedInfo() {
+  const runner = getGoogleScriptRunner();
+  
+  // If in GAS environment, use google.script.run
+  if (runner) {
+    return promisifyGasCall('getLastModifiedInfo')
+      .then(result => {
+        if (!result.success) {
+          throw new Error(result.error || 'Failed to get last modified info');
+        }
+        return result.data;
+      });
+  }
+  
+  // Otherwise, use fetch() for development
+  return fetch(API_BASE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'getLastModified'
+    })
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to get last modified info');
+    }
+    return data.data;
+  });
+}
+
+// --- LEGACY FUNCTIONS (for backward compatibility) ---
 
 export function processCSVComparisonRemote(file1Text, file2Text) {
   return new Promise((resolve, reject) => {

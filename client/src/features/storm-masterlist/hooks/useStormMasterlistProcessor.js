@@ -3,8 +3,7 @@ import { processCSVComparison as localProcessCSVComparison } from '../../../Main
 import { readFileAsText } from '../../../services/fileParsers';
 import {
   hasGoogleScriptRuntime,
-  processAIAgentCommandRemote,
-  processCSVComparisonRemote
+  processAIAgentCommandRemote
 } from '../../../services/googleAppsScript';
 
 const AI_IGNORE_WORDS = [
@@ -76,10 +75,6 @@ export default function useStormMasterlistProcessor() {
         readFileAsText(nmsFile),
         readFileAsText(udmFile)
       ]);
-
-      if (hasGoogleScriptRuntime()) {
-        return await processCSVComparisonRemote(nmsText, udmText);
-      }
 
       const localResult = localProcessCSVComparison(nmsText, udmText);
       if (localResult?.success) {

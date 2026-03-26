@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import useDarkMode from '../../hooks/useDarkMode';
 import useSearchDebounce from '../../hooks/useSearchDebounce';
 import { processWirelessAlarms, processTransportAlarms } from '../../services/dataGrouper';
+import { storeUploadedData, getUserUploadedData, getUserInfo, getLastModifiedInfo } from '../../services/googleAppsScript';
 
 import globeLogoDark from '../../assets/Globe_LogoW.png';
 import globeLogoLight from '../../assets/Globe_LogoB.png';
@@ -33,6 +34,7 @@ export default function SADashboard() {
   const [selectedRowDetails, setSelectedRowDetails] = useState(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [activeSidebarView, setActiveSidebarView] = useState('input');
+  const [sidebarSlideState, setSidebarSlideState] = useState({ previous: null, direction: 0 });
 
   const [drillDownData, setDrillDownData] = useState(null);
   const [modalSearchTerm, setModalSearchTerm] = useState(""); 
@@ -47,10 +49,16 @@ export default function SADashboard() {
   const [graphModalOrigin, setGraphModalOrigin] = useState('0% 0%');                 
   const [selectedGraphAlarm, setSelectedGraphAlarm] = useState(null);
 
-  const listContainerRef = useRef(null);
+  // Backend integration state
+  const [storedData, setStoredData] = useState([]);
+  const [userInfo, setUserInfo] = useState(null);
+  const [isStoringData, setIsStoringData] = useState(false);
+  const [activeStoredData, setActiveStoredData] = useState(null);
+  const [lastModifiedInfo, setLastModifiedInfo] = useState(null);
   const [mainListSize, setMainListSize] = useState({ width: '100%', height: 600 });
   const monitorFile1Ref = useRef(null);
   const monitorFile2Ref = useRef(null);
+  const listContainerRef = useRef(null);
 
   const CHART_COLORS = ['#8a2be2', '#1a73e8', '#00bfa5', '#f0a500', '#f02849'];
   const currentLogo = isDarkMode ? globeLogoDark : globeLogoLight;
@@ -60,6 +68,25 @@ export default function SADashboard() {
     handleResize(); 
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Load user info and stored data on mount
+  useEffect(() => {
+    const loadUserData = async () => {
+      try {
+        const [userData, storedDataList, lastModified] = await Promise.all([
+          getUserInfo(),
+          getUserUploadedData(10),
+          getLastModifiedInfo()
+        ]);
+        setUserInfo(userData);
+        setStoredData(storedDataList);
+        setLastModifiedInfo(lastModified);
+      } catch (error) {
+        console.error('Failed to load user data:', error);
+      }
+    };
+    loadUserData();
   }, []);
 
   useEffect(() => {
@@ -76,6 +103,46 @@ export default function SADashboard() {
     return () => observer.disconnect();
   }, [results]);
 
+  const viewOrder = ['input', 'analytics', 'details', 'history'];
+
+  const handleSidebarViewChange = (view) => {
+    if (view === activeSidebarView) return;
+    const currentIndex = viewOrder.indexOf(activeSidebarView);
+    const targetIndex = viewOrder.indexOf(view);
+    setSidebarSlideState({ previous: activeSidebarView, direction: targetIndex > currentIndex ? 1 : -1 });
+    setActiveSidebarView(view);
+  };
+
+  useEffect(() => {
+    if (!sidebarSlideState.previous) return;
+    const t = setTimeout(() => setSidebarSlideState((prev) => ({ ...prev, previous: null })), 350);
+    return () => clearTimeout(t);
+  }, [activeSidebarView, sidebarSlideState.previous]);
+
+  const getSidebarPanelStyle = (view) => {
+    const isActive = view === activeSidebarView;
+    const isPrevious = view === sidebarSlideState.previous;
+    const distance = sidebarSlideState.direction === 1 ? 20 : -20;
+    const base = {
+      position: 'absolute',
+      inset: 0,
+      padding: '1.5rem',
+      overflowY: 'auto',
+      transition: 'transform 0.35s ease, opacity 0.35s ease',
+      background: 'var(--bg-secondary)'
+    };
+
+    if (isActive) {
+      return { ...base, opacity: 1, transform: 'translateX(0)', zIndex: 2, pointerEvents: 'auto' };
+    }
+
+    if (isPrevious) {
+      return { ...base, opacity: 0, transform: `translateX(${distance * -1}%)`, zIndex: 1, pointerEvents: 'none' };
+    }
+
+    return { ...base, opacity: 0, transform: `translateX(${distance}%)`, zIndex: 0, pointerEvents: 'none' };
+  };
+
   const handleModeToggle = () => {
     setDashboardMode(prev => prev === 'wireless' ? 'transport' : 'wireless');
     setResults([]);
@@ -84,7 +151,7 @@ export default function SADashboard() {
     setSelectedGraphAlarm(null);
     setMonitorFile1(null);
     setMonitorFile2(null);
-    setActiveSidebarView('input');
+    handleSidebarViewChange('input');
     setModalSearchTerm("");
     setDrillDownData(null);
     setIsDrillDownVisible(false);
@@ -140,8 +207,9 @@ export default function SADashboard() {
     } else {
       if (!monitorFile1) return alert("Please upload the NMS file.");
     }
-    
+
     setIsLoading(true);
+    setIsStoringData(true);
     setResults([]);
     setSelectedRowDetails(null);
 
@@ -149,130 +217,124 @@ export default function SADashboard() {
       const nmsData = await readUniversalFile(monitorFile1);
       if (nmsData.length === 0) throw new Error("NMS File is empty.");
 
+      let result;
+      let processedData;
+
       if (dashboardMode === 'wireless') {
         const masterData = await readUniversalFile(monitorFile2);
-        const result = processWirelessAlarms(nmsData, masterData);
-        if (result.success) {
-          setResults(result.data);
-          if (result.data.length > 0) {
-            setActiveSidebarView('analytics');
-            setIsSidebarCollapsed(false); 
-          } else {
-            alert("No matching wireless alarms found (10+ repetitions required).");
-          }
-        } else {
-          alert("Error: " + result.error);
-        }
-        setIsLoading(false);
-      } 
-      else if (dashboardMode === 'transport') {
-        const result = processTransportAlarms(nmsData);
-        if (result.success) {
-          // Normalize transport data to match wireless format
-          const normalizedData = result.data.map(item => ({
-            alert: item.alarm || "N/A",
-            dn: item.li || "N/A",
-            name: item.sn || "N/A",
-            pla: item.severity || "N/A",
-            count: item.count,
-            rawRows: item.rawRows
-          }));
+        result = processWirelessAlarms(nmsData, masterData);
+        processedData = result.data;
+      } else {
+        result = processTransportAlarms(nmsData);
+        processedData = result.data.map(item => ({
+          alert: item.alarm || "N/A",
+          dn: item.li || "N/A",
+          name: item.sn || "N/A",
+          pla: item.severity || "N/A",
+          count: item.count,
+          rawRows: item.rawRows
+        }));
+      }
 
-          setResults(normalizedData);
-          if (normalizedData.length > 0) {
-            setActiveSidebarView('analytics');
-            setIsSidebarCollapsed(false); 
-          } else {
-            alert("No matching transport alarms found.");
-          }
-        } else {
-          alert("Error: " + result.error);
+      if (result.success && processedData.length > 0) {
+        setResults(processedData);
+        handleSidebarViewChange('analytics');
+        setIsSidebarCollapsed(false);
+
+        // Store data to backend
+        try {
+          const fileNames = dashboardMode === 'wireless'
+            ? `${monitorFile1.name} + ${monitorFile2.name}`
+            : monitorFile1.name;
+
+          await storeUploadedData(
+            fileNames,
+            dashboardMode,
+            nmsData,
+            processedData,
+            {
+              totalRecords: nmsData.length,
+              processedRecords: processedData.length,
+              dashboardMode,
+              timestamp: new Date().toISOString()
+            }
+          );
+
+          // Refresh stored data list
+          const [updatedStoredData, lastModified] = await Promise.all([
+            getUserUploadedData(10),
+            getLastModifiedInfo()
+          ]);
+          setStoredData(updatedStoredData);
+          setLastModifiedInfo(lastModified);
+
+        } catch (storeError) {
+          console.error('Failed to store data:', storeError);
+          alert('Data processed successfully but failed to save to database. You can still view the results.');
         }
-        setIsLoading(false);
+      } else {
+        alert(result.success ? "No matching alarms found." : "Error: " + result.error);
       }
 
     } catch (error) {
       alert("Error reading files: " + error.message);
+    } finally {
       setIsLoading(false);
+      setIsStoringData(false);
     }
   };
 
   const handleExport = () => {
     if (results.length === 0) return alert("No data to export.");
-    const flattenedData = [];
-    let originalNMSHeaders = [];
-    if (results[0] && results[0].rawRows && results[0].rawRows.length > 0) {
-      originalNMSHeaders = Object.keys(results[0].rawRows[0]);
+
+    try {
+      const fileName = `Site_Alerts_${dashboardMode}_${new Date().toISOString().split('T')[0]}.xlsx`;
+      const workbook = XLSX.utils.book_new();
+      const worksheet = XLSX.utils.json_to_sheet(results);
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Site Alerts");
+      XLSX.writeFile(workbook, fileName);
+    } catch (error) {
+      alert("Export failed: " + error.message);
     }
-    
-    const strictHeaderOrder = dashboardMode === 'wireless' 
-      ? ["Severity Rank", "Total Repetitions", "Occurrence #", "Masterlist PLA_ID", "Masterlist Site Name", ...originalNMSHeaders]
-      : ["Severity Rank", "Total Repetitions", "Occurrence #", "Severity", "Site Name (Alarm Source)", "Location Info", "Alarm Name", ...originalNMSHeaders];
-
-    results.forEach((group, groupIndex) => {
-      if (group.rawRows) {
-        group.rawRows.forEach((rawRow, idx) => {
-          const formattedRawRow = {};
-          originalNMSHeaders.forEach(key => {
-            const value = rawRow[key];
-            const isTimeCol = key.toLowerCase().includes('time') || key.toLowerCase().includes('date') || key.toLowerCase().includes('stamp');
-            if (isTimeCol && typeof value === 'number' && value > 30000) {
-              const dateObj = new Date(Math.round((value - 25569) * 86400 * 1000));
-              const m = dateObj.getUTCMonth() + 1;
-              const d = dateObj.getUTCDate();
-              const y = dateObj.getUTCFullYear(); 
-              const hh = String(dateObj.getUTCHours()).padStart(2, '0');
-              const mm = String(dateObj.getUTCMinutes()).padStart(2, '0');
-              const ss = String(dateObj.getUTCSeconds()).padStart(2, '0');
-              formattedRawRow[key] = `${m}/${d}/${y} ${hh}:${mm}:${ss}`; 
-            } else {
-              formattedRawRow[key] = (value === null || value === undefined) ? "" : value;
-            }
-          });
-          
-          flattenedData.push({ 
-            "Severity Rank": groupIndex + 1, 
-            "Total Repetitions": group.count, 
-            "Occurrence #": idx + 1, 
-            [dashboardMode === 'wireless' ? "Masterlist PLA_ID" : "Severity"]: group.pla || "N/A", 
-            [dashboardMode === 'wireless' ? "Masterlist Site Name" : "Site Name (Alarm Source)"]: group.name || "N/A", 
-            [dashboardMode === 'wireless' ? "Distinguished Name" : "Location Info"]: group.dn || "N/A",
-            [dashboardMode === 'wireless' ? "Alarm Text" : "Alarm Name"]: group.alert || "N/A",
-            ...formattedRawRow 
-          });
-        });
-      }
-    });
-
-    const worksheet = XLSX.utils.json_to_sheet(flattenedData, { header: strictHeaderOrder });
-    const columnWidths = strictHeaderOrder.map(header => {
-      let maxLength = header.length; 
-      flattenedData.forEach(row => {
-        const cellValue = row[header] ? row[header].toString() : "";
-        if (cellValue.length > maxLength) maxLength = cellValue.length;
-      });
-      return { wch: Math.min(maxLength + 2, 50) }; 
-    });
-    worksheet['!cols'] = columnWidths;
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Raw Alarms");
-    XLSX.writeFile(workbook, `${dashboardMode.toUpperCase()}_SiteAlerts_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
-  const handleNavigate = (path) => {
-    setIsLoading(true);
-    setTimeout(() => navigate(path), 1000); 
+  const handleLoadStoredData = async (storedDataItem) => {
+    try {
+      setIsLoading(true);
+      setActiveStoredData(storedDataItem);
+      
+      // Load the processed data from stored item
+      const processedData = storedDataItem.processedData;
+      
+      // Normalize the data format if needed
+      const normalizedData = Array.isArray(processedData) ? processedData : [];
+      
+      setResults(normalizedData);
+      handleSidebarViewChange('analytics');
+      setIsSidebarCollapsed(false);
+      
+      setIsLoading(false);
+    } catch (error) {
+      alert("Error loading stored data: " + error.message);
+      setIsLoading(false);
+    }
   };
 
-  const filteredResults = useMemo(() => {
-    const term = debouncedTerm.toLowerCase();
-    return results
-      .filter(row => [row.pla, row.name, row.alert, row.dn].filter(Boolean).some(value => value.toString().toLowerCase().includes(term)))
-      .sort((a, b) => b.count - a.count); 
-  }, [results, debouncedTerm]);
+  const handleRefreshStoredData = async () => {
+    try {
+      const [updatedStoredData, lastModified] = await Promise.all([
+        getUserUploadedData(10),
+        getLastModifiedInfo()
+      ]);
+      setStoredData(updatedStoredData);
+      setLastModifiedInfo(lastModified);
+    } catch (error) {
+      console.error('Failed to refresh stored data:', error);
+    }
+  };
 
   const filteredModalRows = useMemo(() => {
-    if (!drillDownData) return [];
+    if (!drillDownData || !drillDownData.rawRows) return [];
     const term = modalSearchTerm.toLowerCase();
     if (!term) return drillDownData.rawRows;
     return drillDownData.rawRows.filter(rawRow => Object.values(rawRow).some(val => String(val).toLowerCase().includes(term)));
@@ -309,6 +371,17 @@ export default function SADashboard() {
     }
     return [...results].sort((a,b) => b.count - a.count).slice(0, 50); 
   }, [results, selectedGraphAlarm]);
+
+  const filteredResults = useMemo(() => {
+    const term = debouncedTerm.toLowerCase();
+    if (!term) return results;
+    
+    return results.filter(row => {
+      return [row.alert, row.name, row.dn, row.pla, row.li, row.sn]
+        .filter(Boolean)
+        .some(value => String(value).toLowerCase().includes(term));
+    });
+  }, [results, debouncedTerm]);
 
   const openGraphModal = () => {
     if (expandBtnRef.current) {
@@ -369,7 +442,7 @@ export default function SADashboard() {
     const columnStyle = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', paddingRight: '15px', boxSizing: 'border-box' };
 
     return (
-      <div style={rowStyle} className="row-hover" onClick={() => { setSelectedRowDetails(row); setActiveSidebarView('details'); setIsSidebarCollapsed(false); }}>
+      <div style={rowStyle} className="row-hover" onClick={() => { setSelectedRowDetails(row); handleSidebarViewChange('details'); setIsSidebarCollapsed(false); }}>
         <div style={{ ...columnStyle, width: '12%', fontWeight: 'bold', color: dashboardMode === 'transport' ? 'var(--color-danger-light)' : 'var(--text-primary)' }}>
            {row.pla || "N/A"}
         </div>
@@ -463,7 +536,47 @@ export default function SADashboard() {
   };
 
   const headerActions = (
-    <div className="header-actions" style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+    <div className="header-actions" style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+      {/* User Info Bar */}
+      {userInfo && (
+        <div style={{
+          background: 'var(--bg-primary)',
+          border: '1px solid var(--border-light)',
+          borderRadius: '8px',
+          padding: '8px 12px',
+          fontSize: '0.8rem',
+          color: 'var(--text-primary)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px'
+        }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--brand-purple)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+            <circle cx="12" cy="7" r="4"></circle>
+          </svg>
+          <span>{userInfo.email}</span>
+        </div>
+      )}
+
+      {/* Last Modified Info */}
+      {lastModifiedInfo && (
+        <div style={{
+          background: 'var(--bg-input)',
+          border: '1px solid var(--border-light)',
+          borderRadius: '8px',
+          padding: '6px 10px',
+          fontSize: '0.7rem',
+          color: 'var(--text-secondary)',
+          maxWidth: '200px'
+        }}>
+          <div style={{ fontWeight: 'bold', color: 'var(--color-danger)', marginBottom: '2px' }}>Last Modified:</div>
+          <div>{lastModifiedInfo.userName}</div>
+          <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}>
+            {new Date(lastModifiedInfo.timestamp).toLocaleString()}
+          </div>
+        </div>
+      )}
+
       <button className="btn theme-toggle" onClick={toggleTheme} title={isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '8px 12px', background: 'transparent', border: '1px solid var(--border-light)', color: 'var(--text-primary)', borderRadius: '8px', cursor: 'pointer', transition: 'all 0.3s ease', outline: 'none' }}>
         {isDarkMode ? (
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -483,7 +596,7 @@ export default function SADashboard() {
   );
 
   return (
-    <DashboardLayout isLoading={isLoading} logo={currentLogo} onLogoClick={() => handleNavigate("/")} headerActions={headerActions}>
+    <DashboardLayout isLoading={isLoading} logo={currentLogo} onLogoClick={() => navigate("/")} headerActions={headerActions}>
       <style>{`
         .custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
@@ -494,15 +607,15 @@ export default function SADashboard() {
       <main className="main-layout" style={{ display: 'flex', overflow: 'hidden', transition: 'gap 0.4s cubic-bezier(0.4, 0, 0.2, 1)', gap: isSidebarCollapsed ? '0px' : '' }}>
         <aside className="sidebar" style={{ width: isSidebarCollapsed ? '0px' : '320px', minWidth: isSidebarCollapsed ? '0px' : '320px', overflow: 'hidden', transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)', borderRight: isSidebarCollapsed ? 'none' : '1px solid var(--border-light)', opacity: isSidebarCollapsed ? 0 : 1, display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)' }}>
             <div style={{ display: 'flex', borderBottom: '1px solid var(--border-light)', flexShrink: 0, background: 'var(--bg-primary)' }}>
-              <button onClick={() => setActiveSidebarView('input')} style={{ flex: 1, padding: '12px 0', fontSize: '0.75rem', fontWeight: 'bold', background: 'none', border: 'none', outline: 'none', cursor: 'pointer', transition: 'all 0.2s', borderBottom: activeSidebarView === 'input' ? (isDarkMode ? '3px solid #ffffff' : '3px solid var(--brand-purple)') : '3px solid transparent', color: activeSidebarView === 'input' ? (isDarkMode ? '#ffffff' : 'var(--brand-purple)') : 'var(--text-secondary)' }}>DATA INPUT</button>
-              <button onClick={() => setActiveSidebarView('analytics')} disabled={results.length === 0} style={{ flex: 1, padding: '12px 0', fontSize: '0.75rem', fontWeight: 'bold', background: 'none', border: 'none', outline: 'none', transition: 'all 0.2s', cursor: results.length === 0 ? 'not-allowed' : 'pointer', opacity: results.length === 0 ? 0.4 : 1, borderBottom: activeSidebarView === 'analytics' ? (isDarkMode ? '3px solid #ffffff' : '3px solid var(--brand-purple)') : '3px solid transparent', color: activeSidebarView === 'analytics' ? (isDarkMode ? '#ffffff' : 'var(--brand-purple)') : 'var(--text-secondary)' }}>TOP ALARMS</button>
-              <button onClick={() => setActiveSidebarView('details')} disabled={!selectedRowDetails} style={{ flex: 1, padding: '12px 0', fontSize: '0.75rem', fontWeight: 'bold', background: 'none', border: 'none', outline: 'none', transition: 'all 0.2s', cursor: !selectedRowDetails ? 'not-allowed' : 'pointer', opacity: !selectedRowDetails ? 0.4 : 1, borderBottom: activeSidebarView === 'details' ? (isDarkMode ? '3px solid #ffffff' : '3px solid var(--brand-purple)') : '3px solid transparent', color: activeSidebarView === 'details' ? (isDarkMode ? '#ffffff' : 'var(--brand-purple)') : 'var(--text-secondary)' }}>DETAILS</button>
+              <button onClick={() => handleSidebarViewChange('input')} style={{ flex: 1, padding: '12px 0', fontSize: '0.75rem', fontWeight: 'bold', background: 'none', border: 'none', outline: 'none', cursor: 'pointer', transition: 'all 0.2s', borderBottom: activeSidebarView === 'input' ? (isDarkMode ? '3px solid #ffffff' : '3px solid var(--brand-purple)') : '3px solid transparent', color: activeSidebarView === 'input' ? (isDarkMode ? '#ffffff' : 'var(--brand-purple)') : 'var(--text-secondary)' }}>DATA INPUT</button>
+              <button onClick={() => handleSidebarViewChange('analytics')} disabled={results.length === 0} style={{ flex: 1, padding: '12px 0', fontSize: '0.75rem', fontWeight: 'bold', background: 'none', border: 'none', outline: 'none', transition: 'all 0.2s', cursor: results.length === 0 ? 'not-allowed' : 'pointer', opacity: results.length === 0 ? 0.4 : 1, borderBottom: activeSidebarView === 'analytics' ? (isDarkMode ? '3px solid #ffffff' : '3px solid var(--brand-purple)') : '3px solid transparent', color: activeSidebarView === 'analytics' ? (isDarkMode ? '#ffffff' : 'var(--brand-purple)') : 'var(--text-secondary)' }}>ANALYTICS</button>
+              <button onClick={() => handleSidebarViewChange('details')} disabled={!selectedRowDetails} style={{ flex: 1, padding: '12px 0', fontSize: '0.75rem', fontWeight: 'bold', background: 'none', border: 'none', outline: 'none', transition: 'all 0.2s', cursor: !selectedRowDetails ? 'not-allowed' : 'pointer', opacity: !selectedRowDetails ? 0.4 : 1, borderBottom: activeSidebarView === 'details' ? (isDarkMode ? '3px solid #ffffff' : '3px solid var(--brand-purple)') : '3px solid transparent', color: activeSidebarView === 'details' ? (isDarkMode ? '#ffffff' : 'var(--brand-purple)') : 'var(--text-secondary)' }}>DETAILS</button>
+              <button onClick={() => handleSidebarViewChange('history')} style={{ flex: 1, padding: '12px 0', fontSize: '0.75rem', fontWeight: 'bold', background: 'none', border: 'none', outline: 'none', cursor: 'pointer', transition: 'all 0.2s', borderBottom: activeSidebarView === 'history' ? (isDarkMode ? '3px solid #ffffff' : '3px solid var(--brand-purple)') : '3px solid transparent', color: activeSidebarView === 'history' ? (isDarkMode ? '#ffffff' : 'var(--brand-purple)') : 'var(--text-secondary)' }}>HISTORY</button>
             </div>
 
-            <div className="custom-scrollbar" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflowY: 'auto', padding: '1.5rem' }}>
-              {activeSidebarView === 'input' && (
+            <div style={{ position: 'relative', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+              <div style={getSidebarPanelStyle('input')}>
                 <div className="data-input-section" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                  
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
                     <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'var(--text-primary)' }}>
                       {dashboardMode === 'wireless' ? 'Wireless' : 'Transport'}
@@ -524,7 +637,6 @@ export default function SADashboard() {
                       <input className="file-input" type="file" accept=".csv, .xlsx, .xls" onChange={(e) => handleFileChange(e, setMonitorFile1)} ref={monitorFile1Ref} />
                     </div>
                   </div>
-                  
                   {dashboardMode === 'wireless' && (
                     <div className="upload-group" style={{ marginTop: '20px' }}>
                       <span className="input-label">SA MASTERLIST File</span>
@@ -535,71 +647,140 @@ export default function SADashboard() {
                       </div>
                     </div>
                   )}
-
                   <button className="btn primary-filled scan-btn full-width" onClick={handleScan} disabled={isLoading} style={{background: 'var(--brand-purple)', color: '#ffffff', border: 'none', marginTop: '10px', padding: '12px', outline: 'none' }}>
                     <img src={searchIcon} alt="Scan" className="btn-icon" style={{ width: '16px', marginRight: '8px' }} />
                     <span>{isLoading ? "Processing Data..." : "Scan Data"}</span>
                   </button>
                 </div>
-              )}
+              </div>
 
-              {activeSidebarView === 'analytics' && alarmStats.length > 0 && (
+              <div style={getSidebarPanelStyle('analytics')}>
+                {alarmStats.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+                      <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'var(--text-primary)' }}>Top Alarms</h3>
+                      <button ref={expandBtnRef} onClick={openGraphModal} style={{ background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--color-info)', fontSize: '0.75rem', fontWeight: 'bold', cursor: 'pointer', padding: '5px 10px', borderRadius: '4px', outline: 'none' }}>Expand 📊</button>
+                    </div>
+                    <div className="custom-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto', overflowX: 'hidden', paddingRight: '5px' }}>
+                      {alarmStats.map((stat, i) => ( 
+                        <div key={i} style={{ width: '100%', background: 'var(--bg-primary)', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', boxSizing: 'border-box' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '6px', fontWeight: 'bold' }}>
+                            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', width: '80%', color: 'var(--text-primary)' }}>{stat.name}</span>
+                            <span style={{ color: 'var(--color-danger)' }}>{stat.count}</span>
+                          </div>
+                          <div style={{ width: '100%', height: '6px', background: 'var(--bg-input)', borderRadius: '3px', overflow: 'hidden' }}>
+                            <div style={{ height: '100%', width: `${stat.percentage}%`, background: 'var(--brand-gradient)', borderRadius: '3px', transition: 'width 1s ease-out' }}></div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: 'var(--text-secondary)' }}>No analytics data to show.</div>
+                )}
+              </div>
+
+              <div style={getSidebarPanelStyle('details')}>
+                {selectedRowDetails ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                    <h3 style={{ margin: 0, marginBottom: '20px', fontSize: '1.1rem', color: 'var(--text-primary)' }}>Alert Breakdown</h3>
+                    <div className="details-content custom-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                      <div style={{ background: 'var(--bg-primary)', padding: '15px', borderRadius: '8px', border: '1px solid var(--border-light)', borderLeft: '4px solid var(--color-danger)' }}>
+                        <span className="input-label" style={{ fontSize: '0.75rem' }}>Alert Count</span>
+                        <div style={{ fontSize: '1.8rem', fontWeight: 'bold', color: 'var(--color-danger)', marginTop: '5px' }}>{selectedRowDetails.count} <span style={{fontSize: '0.9rem', color: 'var(--text-secondary)'}}>Repetitions</span></div>
+                      </div>
+                      <div style={{ background: 'var(--bg-primary)', padding: '15px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
+                        <span className="input-label" style={{ fontSize: '0.75rem' }}>{dashboardMode === 'wireless' ? 'PLA_ID' : 'SEVERITY'}</span>
+                        <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: 'var(--text-primary)', marginTop: '5px' }}>
+                          {selectedRowDetails.pla}
+                        </div>
+                      </div>
+                      <div style={{ background: 'var(--bg-primary)', padding: '15px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
+                        <span className="input-label" style={{ fontSize: '0.75rem' }}>Site Name</span>
+                        <div style={{ fontWeight: 'bold', marginTop: '5px', wordBreak: 'break-word', color: 'var(--color-info)', fontSize: '1rem' }}>
+                          {selectedRowDetails.name}
+                        </div>
+                      </div>
+                      <div style={{ background: 'var(--bg-primary)', padding: '15px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
+                        <span className="input-label" style={{ fontSize: '0.75rem' }}>Alarm Text</span>
+                        <div style={{ fontWeight: 'bold', marginTop: '5px', wordBreak: 'break-word', color: 'var(--text-primary)', fontSize: '0.95rem' }}>
+                          {selectedRowDetails.alert}
+                        </div>
+                      </div>
+                      <div style={{ background: 'var(--bg-primary)', padding: '15px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
+                        <span className="input-label" style={{ fontSize: '0.75rem' }}>{dashboardMode === 'wireless' ? 'Distinguished Name' : 'Location Info'}</span>
+                        <div style={{ fontFamily: 'monospace', marginTop: '5px', wordBreak: 'break-all', fontSize: '0.8rem', color: 'var(--text-secondary)', background: 'var(--bg-input)', padding: '8px', borderRadius: '4px' }}>
+                          {selectedRowDetails.dn}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: 'var(--text-secondary)' }}>Select a row to see details.</div>
+                )}
+              </div>
+
+              <div style={getSidebarPanelStyle('history')}>
                 <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-                    <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'var(--text-primary)' }}>Top Alarms</h3>
-                    <button ref={expandBtnRef} onClick={openGraphModal} style={{ background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--color-info)', fontSize: '0.75rem', fontWeight: 'bold', cursor: 'pointer', padding: '5px 10px', borderRadius: '4px', outline: 'none' }}>Expand 📊</button>
+                    <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'var(--text-primary)' }}>Data History</h3>
+                    <button onClick={handleRefreshStoredData} style={{ background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--color-info)', fontSize: '0.75rem', fontWeight: 'bold', cursor: 'pointer', padding: '5px 10px', borderRadius: '4px', outline: 'none' }}>Refresh</button>
                   </div>
-                  <div className="custom-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto', overflowX: 'hidden', paddingRight: '5px' }}>
-                    {alarmStats.map((stat, i) => ( 
-                      <div key={i} style={{ width: '100%', background: 'var(--bg-primary)', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', boxSizing: 'border-box' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '6px', fontWeight: 'bold' }}>
-                          <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', width: '80%', color: 'var(--text-primary)' }}>{stat.name}</span>
-                          <span style={{ color: 'var(--color-danger)' }}>{stat.count}</span>
-                        </div>
-                        <div style={{ width: '100%', height: '6px', background: 'var(--bg-input)', borderRadius: '3px', overflow: 'hidden' }}>
-                          <div style={{ height: '100%', width: `${stat.percentage}%`, background: 'var(--brand-gradient)', borderRadius: '3px', transition: 'width 1s ease-out' }}></div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
 
-              {activeSidebarView === 'details' && selectedRowDetails && (
-                <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                  <h3 style={{ margin: 0, marginBottom: '20px', fontSize: '1.1rem', color: 'var(--text-primary)' }}>Alert Breakdown</h3>
-                  <div className="details-content custom-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                    <div style={{ background: 'var(--bg-primary)', padding: '15px', borderRadius: '8px', border: '1px solid var(--border-light)', borderLeft: '4px solid var(--color-danger)' }}>
-                      <span className="input-label" style={{ fontSize: '0.75rem' }}>Alert Count</span>
-                      <div style={{ fontSize: '1.8rem', fontWeight: 'bold', color: 'var(--color-danger)', marginTop: '5px' }}>{selectedRowDetails.count} <span style={{fontSize: '0.9rem', color: 'var(--text-secondary)'}}>Repetitions</span></div>
+                  {userInfo && (
+                    <div style={{ background: 'var(--bg-primary)', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', marginBottom: '15px' }}>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Logged in as:</div>
+                      <div style={{ fontWeight: 'bold', color: 'var(--brand-purple)' }}>{userInfo.email}</div>
                     </div>
-                    <div style={{ background: 'var(--bg-primary)', padding: '15px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
-                      <span className="input-label" style={{ fontSize: '0.75rem' }}>{dashboardMode === 'wireless' ? 'PLA_ID' : 'SEVERITY'}</span>
-                      <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: 'var(--text-primary)', marginTop: '5px' }}>
-                        {selectedRowDetails.pla}
+                  )}
+
+                  {lastModifiedInfo && (
+                    <div style={{ background: 'var(--bg-input)', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', marginBottom: '15px' }}>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '5px' }}>Last Data Modification:</div>
+                      <div style={{ fontWeight: 'bold', color: 'var(--color-danger)' }}>{lastModifiedInfo.userName}</div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                        {lastModifiedInfo.action} • {lastModifiedInfo.fileName}
+                      </div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                        {new Date(lastModifiedInfo.timestamp).toLocaleString()}
                       </div>
                     </div>
-                    <div style={{ background: 'var(--bg-primary)', padding: '15px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
-                      <span className="input-label" style={{ fontSize: '0.75rem' }}>Site Name</span>
-                      <div style={{ fontWeight: 'bold', marginTop: '5px', wordBreak: 'break-word', color: 'var(--color-info)', fontSize: '1rem' }}>
-                         {selectedRowDetails.name}
+                  )}
+
+                  <div className="custom-scrollbar" style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+                    {storedData.length > 0 ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        {storedData.map((item, index) => (
+                          <div key={item.id} style={{ background: 'var(--bg-primary)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-light)', cursor: 'pointer', transition: 'all 0.2s' }} onClick={() => handleLoadStoredData(item)}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+                              <div style={{ fontWeight: 'bold', color: 'var(--text-primary)', fontSize: '0.9rem', flex: 1, marginRight: '10px' }}>
+                                {item.fileName.length > 30 ? item.fileName.substring(0, 30) + '...' : item.fileName}
+                              </div>
+                              <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                                {new Date(item.uploadDate).toLocaleDateString()}
+                              </div>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <div style={{ fontSize: '0.8rem', color: 'var(--color-info)' }}>
+                                {item.dataType} • {item.processedData?.length || 0} results
+                              </div>
+                              <div style={{ fontSize: '0.7rem', color: 'var(--brand-purple)', background: 'var(--bg-input)', padding: '2px 6px', borderRadius: '10px' }}>
+                                Load
+                              </div>
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    </div>
-                    <div style={{ background: 'var(--bg-primary)', padding: '15px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
-                      <span className="input-label" style={{ fontSize: '0.75rem' }}>Alarm Text</span>
-                      <div style={{ fontWeight: 'bold', marginTop: '5px', wordBreak: 'break-word', color: 'var(--text-primary)', fontSize: '0.95rem' }}>
-                         {selectedRowDetails.alert}
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '200px', color: 'var(--text-secondary)' }}>
+                        <div style={{ fontSize: '2rem', marginBottom: '10px' }}>📊</div>
+                        <div>No stored data found</div>
+                        <div style={{ fontSize: '0.8rem', marginTop: '5px' }}>Process some data to see it here</div>
                       </div>
-                    </div>
-                    <div style={{ background: 'var(--bg-primary)', padding: '15px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
-                      <span className="input-label" style={{ fontSize: '0.75rem' }}>{dashboardMode === 'wireless' ? 'Distinguished Name' : 'Location Info'}</span>
-                      <div style={{ fontFamily: 'monospace', marginTop: '5px', wordBreak: 'break-all', fontSize: '0.8rem', color: 'var(--text-secondary)', background: 'var(--bg-input)', padding: '8px', borderRadius: '4px' }}>
-                         {selectedRowDetails.dn}
-                      </div>
-                    </div>
+                    )}
                   </div>
                 </div>
-              )}
+              </div>
             </div>
         </aside>
 
@@ -634,7 +815,7 @@ export default function SADashboard() {
                       {VirtualizedRow}
                     </List>
                   ) : (
-                    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
+                    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
                       {[...Array(8)].map((_, i) => (
                         <div key={i} style={{ display: 'flex', alignItems: 'center', padding: '0 20px', height: '70px', borderBottom: "1px solid rgba(128,128,128,0.05)", boxSizing: 'border-box', opacity: 0.6 }}>
                           <div style={{ width: '12%', paddingRight: '15px' }}><div style={{ height: '12px', width: '60%', background: 'var(--border-color)', borderRadius: '4px' }}></div></div>
@@ -644,14 +825,44 @@ export default function SADashboard() {
                           <div style={{ width: '8%', paddingRight: '15px', display: 'flex', justifyContent: 'center' }}><div style={{ height: '24px', width: '30px', background: 'var(--border-color)', borderRadius: '12px' }}></div></div>
                         </div>
                       ))}
-                      <div style={{ position: 'absolute', top: '40%', left: '50%', transform: 'translate(-50%, -50%)', background: 'var(--bg-primary)', padding: '16px 32px', borderRadius: '30px', border: '1px solid var(--border-light)', boxShadow: isDarkMode ? '0 8px 24px rgba(0,0,0,0.6)' : '0 8px 24px rgba(0,0,0,0.12)', display: 'flex', alignItems: 'center', gap: '12px', zIndex: 10 }}>
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--brand-purple)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                          <polyline points="14 2 14 8 20 8"></polyline>
-                          <line x1="12" y1="18" x2="12" y2="12"></line>
-                          <line x1="9" y1="15" x2="15" y2="15"></line>
-                        </svg>
-                        <span style={{ color: 'var(--text-primary)', fontWeight: 'bold', fontSize: '1rem' }}>Upload Data to Populate Table</span>
+                      <div
+                        style={{
+                          position: 'absolute',
+                          inset: 0,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          background: isDarkMode
+                            ? 'linear-gradient(180deg, rgba(18, 22, 30, 0.32), rgba(18, 22, 30, 0.46))'
+                            : 'linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.42))',
+                          backdropFilter: 'blur(16px) saturate(150%)',
+                          WebkitBackdropFilter: 'blur(16px) saturate(150%)',
+                          borderTop: isDarkMode ? '1px solid rgba(255,255,255,0.08)' : '1px solid rgba(255,255,255,0.55)',
+                          zIndex: 10
+                        }}
+                      >
+                        <div
+                          style={{
+                            padding: '16px 32px',
+                            borderRadius: '30px',
+                            border: isDarkMode ? '1px solid rgba(255,255,255,0.18)' : '1px solid rgba(255,255,255,0.45)',
+                            background: isDarkMode ? 'rgba(25, 28, 36, 0.42)' : 'rgba(255, 255, 255, 0.5)',
+                            boxShadow: isDarkMode
+                              ? '0 18px 40px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.08)'
+                              : '0 18px 40px rgba(100, 84, 160, 0.16), inset 0 1px 0 rgba(255,255,255,0.7)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '12px'
+                          }}
+                        >
+                          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--brand-purple)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                            <polyline points="14 2 14 8 20 8"></polyline>
+                            <line x1="12" y1="18" x2="12" y2="12"></line>
+                            <line x1="9" y1="15" x2="15" y2="15"></line>
+                          </svg>
+                          <span style={{ color: 'var(--text-primary)', fontWeight: 'bold', fontSize: '1rem' }}>Upload Data to Populate Table</span>
+                        </div>
                       </div>
                     </div>
                   )}

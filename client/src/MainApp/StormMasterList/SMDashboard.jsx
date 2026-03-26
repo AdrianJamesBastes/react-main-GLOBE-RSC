@@ -25,6 +25,7 @@ import { FixedSizeList as List } from 'react-window';
 import DashboardLayout from '../../components/DashboardLayout';
 import useStormMasterlistProcessor from '../../features/storm-masterlist/hooks/useStormMasterlistProcessor';
 import { exportStormMasterlist } from '../../features/storm-masterlist/services/stormMasterlistExport';
+import { storeUploadedData, getUserUploadedData, getUserInfo, getLastModifiedInfo } from '../../services/googleAppsScript';
 import '../../styles/Dashboard_styles.css';
 import './SM_styles.css';
 
@@ -47,6 +48,13 @@ export default function SMDashboard() {
   const setIsAiLoading = () => {};
   const pageIsLoading = isLoading || isNavigating;
 
+  // Backend integration state
+  const [storedData, setStoredData] = useState([]);
+  const [userInfo, setUserInfo] = useState(null);
+  const [isStoringData, setIsStoringData] = useState(false);
+  const [lastModifiedInfo, setLastModifiedInfo] = useState(null);
+  const [activeStoredData, setActiveStoredData] = useState(null);
+
   const [showPreviewMenu, setShowPreviewMenu] = useState(false);
   const [filterStatus, setFilterStatus] = useState('ALL');
 
@@ -56,7 +64,8 @@ export default function SMDashboard() {
   const [selectedRowDetails, setSelectedRowDetails] = useState(null);
 
   const [aiCommand, setAiCommand] = useState("");
-  const [showAiPanel, setShowAiPanel] = useState(false); 
+  const [showAiPanel, setShowAiPanel] = useState(false);
+  const [showHistoryPanel, setShowHistoryPanel] = useState(false);
   
   const [chatHistory, setChatHistory] = useState([
     { sender: 'ai', text: "Hello Adrian! I'm your veRiSynC AI Copilot. Ask me to list sites or update remarks!" }
@@ -78,6 +87,25 @@ export default function SMDashboard() {
       chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
     }
   }, [chatHistory, isAiLoading, showAiPanel]);
+
+  // Load user info and stored data on mount
+  useEffect(() => {
+    const loadUserData = async () => {
+      try {
+        const [userData, storedDataList, lastModified] = await Promise.all([
+          getUserInfo(),
+          getUserUploadedData(10),
+          getLastModifiedInfo()
+        ]);
+        setUserInfo(userData);
+        setStoredData(storedDataList);
+        setLastModifiedInfo(lastModified);
+      } catch (error) {
+        console.error('Failed to load user data:', error);
+      }
+    };
+    loadUserData();
+  }, []);
 
   const handleFileChange = (e, setFileState) => {
     const file = e.target.files[0];
@@ -222,8 +250,69 @@ export default function SMDashboard() {
     try {
       const data = await scanFiles(monitorFile1, monitorFile2);
       setResults(data);
+
+      // Store data to backend
+      try {
+        const fileNames = `${monitorFile1.name} + ${monitorFile2.name}`;
+
+        await storeUploadedData(
+          fileNames,
+          'storm-masterlist',
+          [], // Raw data not stored for storm masterlist
+          data,
+          {
+            totalRecords: data.length,
+            processedRecords: data.length,
+            dashboardMode: 'storm-masterlist',
+            timestamp: new Date().toISOString()
+          }
+        );
+
+        // Refresh stored data list
+        const [updatedStoredData, lastModified] = await Promise.all([
+          getUserUploadedData(10),
+          getLastModifiedInfo()
+        ]);
+        setStoredData(updatedStoredData);
+        setLastModifiedInfo(lastModified);
+
+      } catch (storeError) {
+        console.error('Failed to store data:', storeError);
+        alert('Data processed successfully but failed to save to database. You can still view the results.');
+      }
+
     } catch (error) {
       alert("Error: " + (error.message || error));
+    }
+  };
+
+  const handleRefreshStoredData = async () => {
+    try {
+      const [updatedStoredData, lastModified] = await Promise.all([
+        getUserUploadedData(10),
+        getLastModifiedInfo()
+      ]);
+      setStoredData(updatedStoredData);
+      setLastModifiedInfo(lastModified);
+    } catch (error) {
+      console.error('Failed to refresh stored data:', error);
+    }
+  };
+
+  const handleLoadStoredData = async (item) => {
+    try {
+      // Load the stored data into the results
+      setResults(item.processedData || []);
+      setFilterStatus('ALL');
+      setSelectedRowDetails(null);
+      setShowHistoryPanel(false);
+      
+      // Update the file inputs to show the loaded file names
+      // Note: We can't actually load the original files, but we can show the names
+      alert(`Loaded data from: ${item.fileName}\n${item.processedData?.length || 0} results loaded.`);
+    } catch (error) {
+      console.error('Failed to load stored data:', error);
+      alert('Failed to load stored data.');
     }
   };
 
@@ -364,32 +453,59 @@ export default function SMDashboard() {
   };
 
   const headerActions = (
-    <div className="header-actions" style={{ display: 'flex', gap: '10px' }}>
-      <button className="btn theme-toggle" onClick={toggleTheme} title="Toggle Theme" aria-label="Toggle theme">
+    <div className="header-actions" style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+      {/* User Info Bar */}
+      {userInfo && (
+        <div style={{
+          background: 'var(--bg-primary)',
+          border: '1px solid var(--border-light)',
+          borderRadius: '8px',
+          padding: '8px 12px',
+          fontSize: '0.8rem',
+          color: 'var(--text-primary)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px'
+        }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--brand-purple)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+            <circle cx="12" cy="7" r="4"></circle>
+          </svg>
+          <span>{userInfo.email}</span>
+        </div>
+      )}
+
+      {/* Last Modified Info */}
+      {lastModifiedInfo && (
+        <div style={{
+          background: 'var(--bg-input)',
+          border: '1px solid var(--border-light)',
+          borderRadius: '8px',
+          padding: '6px 10px',
+          fontSize: '0.7rem',
+          color: 'var(--text-secondary)',
+          maxWidth: '200px'
+        }}>
+          <div style={{ fontWeight: 'bold', color: 'var(--color-danger)', marginBottom: '2px' }}>Last Modified:</div>
+          <div>{lastModifiedInfo.userName}</div>
+          <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}>
+            {new Date(lastModifiedInfo.timestamp).toLocaleString()}
+          </div>
+        </div>
+      )}
+
+      <button className="btn theme-toggle" onClick={toggleTheme} title={isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '8px 12px', background: 'transparent', border: '1px solid var(--border-light)', color: 'var(--text-primary)', borderRadius: '8px', cursor: 'pointer', transition: 'all 0.3s ease', outline: 'none' }}>
         {isDarkMode ? (
-          <>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
-              <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" fill="currentColor" />
-            </svg>
-            <span> Light</span>
-          </>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line>
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+            <line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line>
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+          </svg>
         ) : (
-          <>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
-              <circle cx="12" cy="12" r="3.5" fill="currentColor" />
-              <g stroke="currentColor" strokeWidth="1.2">
-                <path d="M12 2v2" strokeLinecap="round" />
-                <path d="M12 20v2" strokeLinecap="round" />
-                <path d="M4.93 4.93l1.41 1.41" strokeLinecap="round" />
-                <path d="M17.66 17.66l1.41 1.41" strokeLinecap="round" />
-                <path d="M2 12h2" strokeLinecap="round" />
-                <path d="M20 12h2" strokeLinecap="round" />
-                <path d="M4.93 19.07l1.41-1.41" strokeLinecap="round" />
-                <path d="M17.66 6.34l1.41-1.41" strokeLinecap="round" />
-              </g>
-            </svg>
-            <span> Dark</span>
-          </>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+          </svg>
         )}
       </button>
 
@@ -422,7 +538,7 @@ export default function SMDashboard() {
         <aside className="sidebar" style={{ width: '320px', minWidth: '320px', flexShrink: 0 }}>
           
           <div className="sidebar-top-section" ref={sidebarTopRef} style={{ width: '100%', flex: showAiPanel ? '1' : '0 0 350px' }}>
-            <div className={`sidebar-carousel ${showAiPanel ? 'show-ai' : (selectedRowDetails ? 'show-details' : '')}`}>
+            <div className={`sidebar-carousel ${showAiPanel ? 'show-ai' : (showHistoryPanel ? 'show-history' : (selectedRowDetails ? 'show-details' : ''))}`}>
               
               <div className="carousel-panel">
                 <h3 style={{ marginTop: 0, marginBottom: '15px', fontSize: '1.1rem' }}>Data Input</h3>
@@ -486,6 +602,68 @@ export default function SMDashboard() {
                     </div>
                   </div>
                 )}
+              </div>
+
+              <div className="carousel-panel">
+                <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+                    <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'var(--text-primary)' }}>Data History</h3>
+                    <button onClick={handleRefreshStoredData} style={{ background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--color-info)', fontSize: '0.75rem', fontWeight: 'bold', cursor: 'pointer', padding: '5px 10px', borderRadius: '4px', outline: 'none' }}>Refresh</button>
+                  </div>
+
+                  {userInfo && (
+                    <div style={{ background: 'var(--bg-primary)', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', marginBottom: '15px' }}>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Logged in as:</div>
+                      <div style={{ fontWeight: 'bold', color: 'var(--brand-purple)' }}>{userInfo.email}</div>
+                    </div>
+                  )}
+
+                  {lastModifiedInfo && (
+                    <div style={{ background: 'var(--bg-input)', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', marginBottom: '15px' }}>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '5px' }}>Last Data Modification:</div>
+                      <div style={{ fontWeight: 'bold', color: 'var(--color-danger)' }}>{lastModifiedInfo.userName}</div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                        {lastModifiedInfo.action} • {lastModifiedInfo.fileName}
+                      </div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                        {new Date(lastModifiedInfo.timestamp).toLocaleString()}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="custom-scrollbar" style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+                    {storedData.length > 0 ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        {storedData.map((item, index) => (
+                          <div key={item.id} style={{ background: 'var(--bg-primary)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-light)', cursor: 'pointer', transition: 'all 0.2s' }} onClick={() => handleLoadStoredData(item)}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+                              <div style={{ fontWeight: 'bold', color: 'var(--text-primary)', fontSize: '0.9rem', flex: 1, marginRight: '10px' }}>
+                                {item.fileName.length > 30 ? item.fileName.substring(0, 30) + '...' : item.fileName}
+                              </div>
+                              <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                                {new Date(item.uploadDate).toLocaleDateString()}
+                              </div>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <div style={{ fontSize: '0.8rem', color: 'var(--color-info)' }}>
+                                {item.dataType} • {item.processedData?.length || 0} results
+                              </div>
+                              <div style={{ fontSize: '0.7rem', color: 'var(--brand-purple)', background: 'var(--bg-input)', padding: '2px 6px', borderRadius: '10px' }}>
+                                Load
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '200px', color: 'var(--text-secondary)' }}>
+                        <div style={{ fontSize: '2rem', marginBottom: '10px' }}>📊</div>
+                        <div>No stored data found</div>
+                        <div style={{ fontSize: '0.8rem', marginTop: '5px' }}>Process some data to see it here</div>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
 
               <div className="carousel-panel" style={{ padding: 0 }}>
@@ -572,7 +750,7 @@ export default function SMDashboard() {
             </div>
           </div>
 
-          <div className="sidebar-map-wrapper" style={{ display: showAiPanel ? 'none' : 'flex' }}>
+          <div className="sidebar-map-wrapper" style={{ display: (showAiPanel || showHistoryPanel) ? 'none' : 'flex' }}>
             <div className="map-floating-header">
               <span className="floating-title">Site Visualizer</span>
               <button className="floating-btn" onClick={() => setShowBigMap(true)} aria-label="Expand map">
@@ -585,7 +763,7 @@ export default function SMDashboard() {
               </button>
             </div>
             <div className="mini-map">
-              {!showAiPanel && (
+              {!(showAiPanel || showHistoryPanel) && (
                 <MapVisualizer selectedSite={selectedSite} filteredResults={filteredResults} isExpanded={false} />
               )}
             </div>
@@ -596,9 +774,27 @@ export default function SMDashboard() {
         <section className="content-area">
 
           <div 
+            className={`history-side-tab ${showHistoryPanel ? 'active' : ''}`}
+            onClick={() => {
+              setShowHistoryPanel(!showHistoryPanel);
+              if (!showHistoryPanel) {
+                setSelectedRowDetails(null);
+                setShowAiPanel(false);
+              }
+            }}
+          >
+            <span style={{ fontSize: '1rem', transform: 'rotate(90deg)' }}>{showHistoryPanel ? "✕" : "📊"}</span>
+            <span className="history-tab-text">{showHistoryPanel ? "CLOSE" : "HISTORY"}</span>
+          </div>
+
+          <div 
             className={`ai-side-tab ${showAiPanel ? 'active' : ''}`}
             onClick={() => {
               setShowAiPanel(!showAiPanel);
+              if (!showAiPanel) {
+                setSelectedRowDetails(null);
+                setShowHistoryPanel(false);
+              }
             }}
           >
             <span style={{ fontSize: '1rem', transform: 'rotate(90deg)' }}>{showAiPanel ? "✕" : "</>"}</span>
