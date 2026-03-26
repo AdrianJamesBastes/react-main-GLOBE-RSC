@@ -76,12 +76,12 @@ export function storeUploadedData(fileName, dataType, rawData, processedData, me
 /**
  * Retrieve user's uploaded data from Google Sheets
  */
-export function getUserUploadedData(limit = 20) {
+export function getUserUploadedData(limit = 20, dataType = '') {
   const runner = getGoogleScriptRunner();
   
   // If in GAS environment, use google.script.run
   if (runner) {
-    return promisifyGasCall('getUserUploadedData', limit)
+    return promisifyGasCall('getUserUploadedData', limit, dataType)
       .then(result => {
         if (!result.success) {
           throw new Error(result.error || 'Failed to retrieve data');
@@ -96,13 +96,105 @@ export function getUserUploadedData(limit = 20) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       action: 'getData',
-      limit
+      limit,
+      dataType
     })
   })
   .then(response => response.json())
   .then(data => {
     if (!data.success) {
       throw new Error(data.error || 'Failed to retrieve data');
+    }
+    return data.data;
+  });
+}
+
+export function getUserUploadedDataSummary(limit = 20, dataType = '') {
+  const runner = getGoogleScriptRunner();
+
+  if (runner) {
+    return promisifyGasCall('getUserUploadedDataSummary', limit, dataType)
+      .then(result => {
+        if (!result.success) {
+          throw new Error(result.error || 'Failed to retrieve data summary');
+        }
+        return result.data;
+      });
+  }
+
+  return fetch(API_BASE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'getDataSummary',
+      limit,
+      dataType
+    })
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to retrieve data summary');
+    }
+    return data.data;
+  });
+}
+
+export function getUploadedDataById(dataId) {
+  const runner = getGoogleScriptRunner();
+
+  if (runner) {
+    return promisifyGasCall('getUploadedDataById', dataId)
+      .then(result => {
+        if (!result.success) {
+          throw new Error(result.error || 'Failed to retrieve stored data');
+        }
+        return result.data;
+      });
+  }
+
+  return fetch(API_BASE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'getDataById',
+      dataId
+    })
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to retrieve stored data');
+    }
+    return data.data;
+  });
+}
+
+export function getLatestUserUploadedData(dataType = '') {
+  const runner = getGoogleScriptRunner();
+
+  if (runner) {
+    return promisifyGasCall('getLatestUserUploadedData', dataType)
+      .then(result => {
+        if (!result.success) {
+          throw new Error(result.error || 'Failed to retrieve latest stored data');
+        }
+        return result.data;
+      });
+  }
+
+  return fetch(API_BASE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'getLatestData',
+      dataType
+    })
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to retrieve latest stored data');
     }
     return data.data;
   });

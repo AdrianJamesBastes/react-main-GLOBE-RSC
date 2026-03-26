@@ -2,7 +2,14 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import useDarkMode from '../../hooks/useDarkMode';
 import useSearchDebounce from '../../hooks/useSearchDebounce';
 import { processWirelessAlarms, processTransportAlarms } from '../../services/dataGrouper';
-import { storeUploadedData, getUserUploadedData, getUserInfo, getLastModifiedInfo } from '../../services/googleAppsScript';
+import {
+  storeUploadedData,
+  getUserUploadedDataSummary,
+  getUploadedDataById,
+  getLatestUserUploadedData,
+  getUserInfo,
+  getLastModifiedInfo
+} from '../../services/googleAppsScript';
 
 import globeLogoDark from '../../assets/Globe_LogoW.png';
 import globeLogoLight from '../../assets/Globe_LogoB.png';
@@ -24,6 +31,8 @@ export default function SADashboard() {
   const [monitorFile1, setMonitorFile1] = useState(null); 
   const [monitorFile2, setMonitorFile2] = useState(null); 
   const [isLoading, setIsLoading] = useState(false);
+  const [isInitialDataLoading, setIsInitialDataLoading] = useState(true);
+  const [isRefreshingSavedData, setIsRefreshingSavedData] = useState(false);
   const [results, setResults] = useState([]);
   const [dashboardMode, setDashboardMode] = useState('wireless');
 
@@ -52,8 +61,6 @@ export default function SADashboard() {
   // Backend integration state
   const [storedData, setStoredData] = useState([]);
   const [userInfo, setUserInfo] = useState(null);
-  const [isStoringData, setIsStoringData] = useState(false);
-  const [activeStoredData, setActiveStoredData] = useState(null);
   const [lastModifiedInfo, setLastModifiedInfo] = useState(null);
   const [mainListSize, setMainListSize] = useState({ width: '100%', height: 600 });
   const monitorFile1Ref = useRef(null);
@@ -62,6 +69,36 @@ export default function SADashboard() {
 
   const CHART_COLORS = ['#8a2be2', '#1a73e8', '#00bfa5', '#f0a500', '#f02849'];
   const currentLogo = isDarkMode ? globeLogoDark : globeLogoLight;
+  const CACHE_TTL_MS = 5 * 60 * 1000;
+  const cacheKey = `site_alert_cache_${dashboardMode}_v1`;
+  const applyStoredProcessedData = (item) => {
+    if (!item) return;
+    const processedData = Array.isArray(item.processedData) ? item.processedData : [];
+    setResults(processedData);
+    setSelectedRowDetails(null);
+    handleSidebarViewChange('analytics');
+    setIsSidebarCollapsed(false);
+  };
+
+  const readCache = () => {
+    try {
+      const raw = sessionStorage.getItem(cacheKey);
+      if (!raw) return null;
+      const cached = JSON.parse(raw);
+      if (!cached?.timestamp || (Date.now() - cached.timestamp) > CACHE_TTL_MS) return null;
+      return cached;
+    } catch {
+      return null;
+    }
+  };
+
+  const writeCache = (payload) => {
+    try {
+      sessionStorage.setItem(cacheKey, JSON.stringify({ ...payload, timestamp: Date.now() }));
+    } catch {
+      // Ignore caching failures
+    }
+  };
 
   useEffect(() => {
     const handleResize = () => setModalListHeight((window.innerHeight * 0.9) - 190);
@@ -73,21 +110,46 @@ export default function SADashboard() {
   // Load user info and stored data on mount
   useEffect(() => {
     const loadUserData = async () => {
+      const cached = readCache();
+      if (cached) {
+        setUserInfo(cached.userInfo || null);
+        setStoredData(cached.storedData || []);
+        setLastModifiedInfo(cached.lastModifiedInfo || null);
+        if (cached.latestStoredData) {
+          applyStoredProcessedData(cached.latestStoredData);
+        }
+        setIsInitialDataLoading(false);
+      }
+
       try {
-        const [userData, storedDataList, lastModified] = await Promise.all([
+        setIsRefreshingSavedData(true);
+        const [userData, storedDataList, latestStoredData, lastModified] = await Promise.all([
           getUserInfo(),
-          getUserUploadedData(10),
+          getUserUploadedDataSummary(10, dashboardMode),
+          getLatestUserUploadedData(dashboardMode),
           getLastModifiedInfo()
         ]);
         setUserInfo(userData);
         setStoredData(storedDataList);
+        if (latestStoredData) {
+          applyStoredProcessedData(latestStoredData);
+        }
         setLastModifiedInfo(lastModified);
+        writeCache({
+          userInfo: userData,
+          storedData: storedDataList,
+          lastModifiedInfo: lastModified,
+          latestStoredData: latestStoredData || null
+        });
       } catch (error) {
         console.error('Failed to load user data:', error);
+      } finally {
+        setIsRefreshingSavedData(false);
+        setIsInitialDataLoading(false);
       }
     };
     loadUserData();
-  }, []);
+  }, [dashboardMode]);
 
   useEffect(() => {
     if (!listContainerRef.current) return;
@@ -209,7 +271,6 @@ export default function SADashboard() {
     }
 
     setIsLoading(true);
-    setIsStoringData(true);
     setResults([]);
     setSelectedRowDetails(null);
 
@@ -241,37 +302,43 @@ export default function SADashboard() {
         handleSidebarViewChange('analytics');
         setIsSidebarCollapsed(false);
 
-        // Store data to backend
-        try {
-          const fileNames = dashboardMode === 'wireless'
-            ? `${monitorFile1.name} + ${monitorFile2.name}`
-            : monitorFile1.name;
+        const fileNames = dashboardMode === 'wireless'
+          ? `${monitorFile1.name} + ${monitorFile2.name}`
+          : monitorFile1.name;
 
-          await storeUploadedData(
-            fileNames,
+        storeUploadedData(
+          fileNames,
+          dashboardMode,
+          [],
+          processedData,
+          {
+            totalRecords: nmsData.length,
+            processedRecords: processedData.length,
             dashboardMode,
-            nmsData,
-            processedData,
-            {
-              totalRecords: nmsData.length,
-              processedRecords: processedData.length,
-              dashboardMode,
-              timestamp: new Date().toISOString()
-            }
-          );
-
-          // Refresh stored data list
-          const [updatedStoredData, lastModified] = await Promise.all([
-            getUserUploadedData(10),
-            getLastModifiedInfo()
-          ]);
-          setStoredData(updatedStoredData);
-          setLastModifiedInfo(lastModified);
-
-        } catch (storeError) {
-          console.error('Failed to store data:', storeError);
-          alert('Data processed successfully but failed to save to database. You can still view the results.');
-        }
+            timestamp: new Date().toISOString()
+          }
+        )
+          .then(async () => {
+            const [updatedStoredData, lastModified] = await Promise.all([
+              getUserUploadedDataSummary(10, dashboardMode),
+              getLastModifiedInfo()
+            ]);
+            setStoredData(updatedStoredData);
+            setLastModifiedInfo(lastModified);
+            writeCache({
+              userInfo,
+              storedData: updatedStoredData,
+              lastModifiedInfo: lastModified,
+              latestStoredData: {
+                processedData,
+                fileName: fileNames
+              }
+            });
+          })
+          .catch((storeError) => {
+            console.error('Failed to store data:', storeError);
+            alert('Data processed successfully but failed to save to database. You can still view the results.');
+          });
       } else {
         alert(result.success ? "No matching alarms found." : "Error: " + result.error);
       }
@@ -280,39 +347,82 @@ export default function SADashboard() {
       alert("Error reading files: " + error.message);
     } finally {
       setIsLoading(false);
-      setIsStoringData(false);
     }
   };
 
   const handleExport = () => {
     if (results.length === 0) return alert("No data to export.");
-
-    try {
-      const fileName = `Site_Alerts_${dashboardMode}_${new Date().toISOString().split('T')[0]}.xlsx`;
-      const workbook = XLSX.utils.book_new();
-      const worksheet = XLSX.utils.json_to_sheet(results);
-      XLSX.utils.book_append_sheet(workbook, worksheet, "Site Alerts");
-      XLSX.writeFile(workbook, fileName);
-    } catch (error) {
-      alert("Export failed: " + error.message);
+    const flattenedData = [];
+    let originalNMSHeaders = [];
+    if (results[0] && results[0].rawRows && results[0].rawRows.length > 0) {
+      originalNMSHeaders = Object.keys(results[0].rawRows[0]);
     }
+
+    const strictHeaderOrder = dashboardMode === 'wireless'
+      ? ["Severity Rank", "Total Repetitions", "Occurrence #", "Masterlist PLA_ID", "Masterlist Site Name", ...originalNMSHeaders]
+      : ["Severity Rank", "Total Repetitions", "Occurrence #", "Severity", "Site Name (Alarm Source)", "Location Info", "Alarm Name", ...originalNMSHeaders];
+
+    results.forEach((group, groupIndex) => {
+      if (group.rawRows) {
+        group.rawRows.forEach((rawRow, idx) => {
+          const formattedRawRow = {};
+          originalNMSHeaders.forEach(key => {
+            const value = rawRow[key];
+            const isTimeCol = key.toLowerCase().includes('time') || key.toLowerCase().includes('date') || key.toLowerCase().includes('stamp');
+            if (isTimeCol && typeof value === 'number' && value > 30000) {
+              const dateObj = new Date(Math.round((value - 25569) * 86400 * 1000));
+              const m = dateObj.getUTCMonth() + 1;
+              const d = dateObj.getUTCDate();
+              const y = dateObj.getUTCFullYear();
+              const hh = String(dateObj.getUTCHours()).padStart(2, '0');
+              const mm = String(dateObj.getUTCMinutes()).padStart(2, '0');
+              const ss = String(dateObj.getUTCSeconds()).padStart(2, '0');
+              formattedRawRow[key] = `${m}/${d}/${y} ${hh}:${mm}:${ss}`;
+            } else {
+              formattedRawRow[key] = (value === null || value === undefined) ? "" : value;
+            }
+          });
+
+          flattenedData.push({
+            "Severity Rank": groupIndex + 1,
+            "Total Repetitions": group.count,
+            "Occurrence #": idx + 1,
+            [dashboardMode === 'wireless' ? "Masterlist PLA_ID" : "Severity"]: group.pla || "N/A",
+            [dashboardMode === 'wireless' ? "Masterlist Site Name" : "Site Name (Alarm Source)"]: group.name || "N/A",
+            [dashboardMode === 'wireless' ? "Distinguished Name" : "Location Info"]: group.dn || "N/A",
+            [dashboardMode === 'wireless' ? "Alarm Text" : "Alarm Name"]: group.alert || "N/A",
+            ...formattedRawRow
+          });
+        });
+      }
+    });
+
+    const worksheet = XLSX.utils.json_to_sheet(flattenedData, { header: strictHeaderOrder });
+    const columnWidths = strictHeaderOrder.map(header => {
+      let maxLength = header.length;
+      flattenedData.forEach(row => {
+        const cellValue = row[header] ? row[header].toString() : "";
+        if (cellValue.length > maxLength) maxLength = cellValue.length;
+      });
+      return { wch: Math.min(maxLength + 2, 50) };
+    });
+    worksheet['!cols'] = columnWidths;
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Raw Alarms");
+    XLSX.writeFile(workbook, `${dashboardMode.toUpperCase()}_SiteAlerts_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
   const handleLoadStoredData = async (storedDataItem) => {
     try {
       setIsLoading(true);
-      setActiveStoredData(storedDataItem);
-      
-      // Load the processed data from stored item
-      const processedData = storedDataItem.processedData;
-      
-      // Normalize the data format if needed
-      const normalizedData = Array.isArray(processedData) ? processedData : [];
-      
-      setResults(normalizedData);
-      handleSidebarViewChange('analytics');
-      setIsSidebarCollapsed(false);
-      
+      const fullStoredData = await getUploadedDataById(storedDataItem.id);
+      applyStoredProcessedData(fullStoredData);
+      writeCache({
+        userInfo,
+        storedData,
+        lastModifiedInfo,
+        latestStoredData: fullStoredData
+      });
       setIsLoading(false);
     } catch (error) {
       alert("Error loading stored data: " + error.message);
@@ -323,11 +433,16 @@ export default function SADashboard() {
   const handleRefreshStoredData = async () => {
     try {
       const [updatedStoredData, lastModified] = await Promise.all([
-        getUserUploadedData(10),
+        getUserUploadedDataSummary(10, dashboardMode),
         getLastModifiedInfo()
       ]);
       setStoredData(updatedStoredData);
       setLastModifiedInfo(lastModified);
+      writeCache({
+        userInfo,
+        storedData: updatedStoredData,
+        lastModifiedInfo: lastModified
+      });
     } catch (error) {
       console.error('Failed to refresh stored data:', error);
     }
@@ -535,68 +650,118 @@ export default function SADashboard() {
     return null;
   };
 
+const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.email || "Unknown User";
+  const currentUserEmail = userInfo?.email || "No email";
+  // Smart fallback: keep undefined if no info exists
+  const lastModifiedName = lastModifiedInfo?.userDisplayName || lastModifiedInfo?.userName || lastModifiedInfo?.userEmail; 
+  const lastModifiedTimestamp = lastModifiedInfo?.timestamp
+    ? new Date(lastModifiedInfo.timestamp).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : "No previous sync";
+
+  // Create a sleek avatar letter
+  const userInitials = currentUserName !== "Unknown User" ? currentUserName.charAt(0).toUpperCase() : "?";
+
   const headerActions = (
-    <div className="header-actions" style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
-      {/* User Info Bar */}
-      {userInfo && (
-        <div style={{
-          background: 'var(--bg-primary)',
-          border: '1px solid var(--border-light)',
-          borderRadius: '8px',
-          padding: '8px 12px',
-          fontSize: '0.8rem',
-          color: 'var(--text-primary)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px'
-        }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--brand-purple)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-            <circle cx="12" cy="7" r="4"></circle>
-          </svg>
-          <span>{userInfo.email}</span>
-        </div>
+    <div className="header-actions" style={{ display: 'flex', gap: '20px', alignItems: 'center', justifyContent: 'flex-end', paddingRight: '10px' }}>
+      
+      {isRefreshingSavedData && !isInitialDataLoading && (
+        <span style={{ fontSize: '0.75rem', color: 'var(--color-info)', fontWeight: 'bold', animation: 'pulse 1.5s infinite' }}>
+          Refreshing...
+        </span>
       )}
 
-      {/* Last Modified Info */}
-      {lastModifiedInfo && (
-        <div style={{
-          background: 'var(--bg-input)',
-          border: '1px solid var(--border-light)',
-          borderRadius: '8px',
-          padding: '6px 10px',
-          fontSize: '0.7rem',
-          color: 'var(--text-secondary)',
-          maxWidth: '200px'
-        }}>
-          <div style={{ fontWeight: 'bold', color: 'var(--color-danger)', marginBottom: '2px' }}>Last Modified:</div>
-          <div>{lastModifiedInfo.userName}</div>
-          <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}>
-            {new Date(lastModifiedInfo.timestamp).toLocaleString()}
-          </div>
+      {/* 1. Sleek Text-Only Last Modified (SMART RENDERING) */}
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: '1.3' }}>
+        <span style={{ fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)', fontWeight: 'bold' }}>
+          {lastModifiedName ? "Last Modified By" : "Database Status"}
+        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {lastModifiedName ? (
+            <>
+              <span style={{ fontSize: '0.85rem', fontWeight: '700', color: 'var(--text-primary)' }}>
+                {lastModifiedName}
+              </span>
+              <span style={{ color: 'var(--text-secondary)', fontSize: '0.7rem' }}>•</span>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                {lastModifiedTimestamp}
+              </span>
+            </>
+          ) : (
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+              {lastModifiedTimestamp}
+            </span>
+          )}
         </div>
-      )}
+      </div>
 
-      <button className="btn theme-toggle" onClick={toggleTheme} title={isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '8px 12px', background: 'transparent', border: '1px solid var(--border-light)', color: 'var(--text-primary)', borderRadius: '8px', cursor: 'pointer', transition: 'all 0.3s ease', outline: 'none' }}>
-        {isDarkMode ? (
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line>
-            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
-            <line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line>
-            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
-          </svg>
-        ) : (
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
-          </svg>
-        )}
-      </button>
-      <button className="btn primary-outline" onClick={handleExport} disabled={results.length === 0} style={{ outline: 'none' }}>Export Raw Data</button>
+      {/* Subtle Vertical Divider */}
+      <div style={{ width: '1px', height: '28px', backgroundColor: 'var(--border-light)', opacity: 0.8 }}></div>
+
+      {/* 2. Modern User Profile with Avatar */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: '1.3' }}>
+          <span style={{ fontWeight: '800', fontSize: '0.85rem', color: 'var(--text-primary)' }}>{currentUserName}</span>
+          <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{currentUserEmail}</span>
+        </div>
+        <div style={{
+          width: '36px', height: '36px', borderRadius: '50%',
+          background: 'linear-gradient(135deg, var(--brand-purple), #6b21a8)',
+          color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontWeight: 'bold', fontSize: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
+        }}>
+          {userInitials}
+        </div>
+      </div>
+
+      {/* Subtle Vertical Divider */}
+      <div style={{ width: '1px', height: '28px', backgroundColor: 'var(--border-light)', opacity: 0.8 }}></div>
+
+      {/* 3. Action Buttons (Theme & Export) */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        
+        {/* Circular Theme Toggle */}
+        <button className="btn theme-toggle" onClick={toggleTheme} title="Toggle Theme" style={{ 
+          width: '36px', height: '36px', borderRadius: '50%', padding: 0,
+          background: 'var(--bg-input)', border: '1px solid var(--border-light)', 
+          color: 'var(--text-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          cursor: 'pointer', transition: 'all 0.2s ease', outline: 'none' 
+        }}>
+          {isDarkMode ? (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line>
+              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+              <line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line>
+              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+            </svg>
+          ) : (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+            </svg>
+          )}
+        </button>
+
+        {/* Pill-shaped Export Button for SA Dashboard */}
+        <button 
+          onClick={handleExport} 
+          disabled={results.length === 0} 
+          style={{ 
+            height: '36px', borderRadius: '18px', padding: '0 16px',
+            background: 'var(--text-primary)', color: 'var(--bg-primary)',
+            border: 'none', fontWeight: 'bold', fontSize: '0.8rem',
+            cursor: results.length === 0 ? 'not-allowed' : 'pointer',
+            opacity: results.length === 0 ? 0.5 : 1, transition: 'all 0.2s ease', outline: 'none',
+            boxShadow: '0 2px 6px rgba(0,0,0,0.1)'
+          }}
+        >
+          Export Raw Data
+        </button>
+
+      </div>
     </div>
   );
 
   return (
-    <DashboardLayout isLoading={isLoading} logo={currentLogo} onLogoClick={() => navigate("/")} headerActions={headerActions}>
+    <DashboardLayout isLoading={isLoading || isInitialDataLoading} logo={currentLogo} onLogoClick={() => navigate("/")} headerActions={headerActions}>
       <style>{`
         .custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
@@ -730,14 +895,16 @@ export default function SADashboard() {
                   {userInfo && (
                     <div style={{ background: 'var(--bg-primary)', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', marginBottom: '15px' }}>
                       <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Logged in as:</div>
-                      <div style={{ fontWeight: 'bold', color: 'var(--brand-purple)' }}>{userInfo.email}</div>
+                      <div style={{ fontWeight: 'bold', color: 'var(--brand-purple)' }}>{currentUserName}</div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{currentUserEmail}</div>
                     </div>
                   )}
 
                   {lastModifiedInfo && (
                     <div style={{ background: 'var(--bg-input)', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', marginBottom: '15px' }}>
                       <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '5px' }}>Last Data Modification:</div>
-                      <div style={{ fontWeight: 'bold', color: 'var(--color-danger)' }}>{lastModifiedInfo.userName}</div>
+                      <div style={{ fontWeight: 'bold', color: 'var(--color-danger)' }}>{lastModifiedName}</div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{lastModifiedEmail}</div>
                       <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
                         {lastModifiedInfo.action} • {lastModifiedInfo.fileName}
                       </div>
@@ -762,7 +929,7 @@ export default function SADashboard() {
                             </div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                               <div style={{ fontSize: '0.8rem', color: 'var(--color-info)' }}>
-                                {item.dataType} • {item.processedData?.length || 0} results
+                                {item.dataType} • {item.processedCount ?? item.metadata?.processedRecords ?? 0} results
                               </div>
                               <div style={{ fontSize: '0.7rem', color: 'var(--brand-purple)', background: 'var(--bg-input)', padding: '2px 6px', borderRadius: '10px' }}>
                                 Load

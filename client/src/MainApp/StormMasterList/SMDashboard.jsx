@@ -25,7 +25,14 @@ import { FixedSizeList as List } from 'react-window';
 import DashboardLayout from '../../components/DashboardLayout';
 import useStormMasterlistProcessor from '../../features/storm-masterlist/hooks/useStormMasterlistProcessor';
 import { exportStormMasterlist } from '../../features/storm-masterlist/services/stormMasterlistExport';
-import { storeUploadedData, getUserUploadedData, getUserInfo, getLastModifiedInfo } from '../../services/googleAppsScript';
+import {
+  storeUploadedData,
+  getUserUploadedDataSummary,
+  getUploadedDataById,
+  getLatestUserUploadedData,
+  getUserInfo,
+  getLastModifiedInfo
+} from '../../services/googleAppsScript';
 import '../../styles/Dashboard_styles.css';
 import './SM_styles.css';
 
@@ -40,20 +47,23 @@ export default function SMDashboard() {
   const [monitorFile2, setMonitorFile2] = useState(null);
   const [results, setResults] = useState([]);
   const [isNavigating, setIsNavigating] = useState(false);
+  const [isStoredDataLoading, setIsStoredDataLoading] = useState(false);
+  const [isInitialDataLoading, setIsInitialDataLoading] = useState(true);
+  const [isRefreshingSavedData, setIsRefreshingSavedData] = useState(false);
 
   const navigate = useNavigate();
   const [isDarkMode, toggleTheme] = useDarkMode();
   const { searchTerm, setSearchTerm } = useSearchDebounce();
   const { isLoading, isAiLoading, scanFiles, runAiCommand } = useStormMasterlistProcessor();
   const setIsAiLoading = () => {};
-  const pageIsLoading = isLoading || isNavigating;
+  const pageIsLoading = isLoading || isNavigating || isStoredDataLoading || isInitialDataLoading;
+  const CACHE_KEY = 'storm_masterlist_cache_v1';
+  const CACHE_TTL_MS = 5 * 60 * 1000;
 
   // Backend integration state
   const [storedData, setStoredData] = useState([]);
   const [userInfo, setUserInfo] = useState(null);
-  const [isStoringData, setIsStoringData] = useState(false);
   const [lastModifiedInfo, setLastModifiedInfo] = useState(null);
-  const [activeStoredData, setActiveStoredData] = useState(null);
 
   const [showPreviewMenu, setShowPreviewMenu] = useState(false);
   const [filterStatus, setFilterStatus] = useState('ALL');
@@ -66,11 +76,38 @@ export default function SMDashboard() {
   const [aiCommand, setAiCommand] = useState("");
   const [showAiPanel, setShowAiPanel] = useState(false);
   const [showHistoryPanel, setShowHistoryPanel] = useState(false);
+
+  const applyStoredProcessedData = (item) => {
+    if (!item) return;
+    setResults(item.processedData || []);
+    setFilterStatus('ALL');
+    setSelectedRowDetails(null);
+    setShowHistoryPanel(false);
+  };
+
+  const readCache = () => {
+    try {
+      const raw = sessionStorage.getItem(CACHE_KEY);
+      if (!raw) return null;
+      const cached = JSON.parse(raw);
+      if (!cached?.timestamp || (Date.now() - cached.timestamp) > CACHE_TTL_MS) return null;
+      return cached;
+    } catch {
+      return null;
+    }
+  };
+
+  const writeCache = (payload) => {
+    try {
+      sessionStorage.setItem(CACHE_KEY, JSON.stringify({ ...payload, timestamp: Date.now() }));
+    } catch {
+      // Ignore caching failures
+    }
+  };
   
   const [chatHistory, setChatHistory] = useState([
     { sender: 'ai', text: "Hello Adrian! I'm your veRiSynC AI Copilot. Ask me to list sites or update remarks!" }
   ]);
-  
   const chatContainerRef = useRef(null);
   const sidebarTopRef = useRef(null);
 
@@ -80,28 +117,47 @@ export default function SMDashboard() {
     if (sidebarTopRef.current) {
       sidebarTopRef.current.scrollLeft = 0;
     }
-  }, [showAiPanel, selectedRowDetails]);
-
-  useEffect(() => {
-    if (showAiPanel && chatContainerRef.current) {
-      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
-    }
-  }, [chatHistory, isAiLoading, showAiPanel]);
+  }, [showHistoryPanel, selectedRowDetails]);
 
   // Load user info and stored data on mount
   useEffect(() => {
     const loadUserData = async () => {
+      const cached = readCache();
+      if (cached) {
+        setUserInfo(cached.userInfo || null);
+        setStoredData(cached.storedData || []);
+        setLastModifiedInfo(cached.lastModifiedInfo || null);
+        if (cached.latestStoredData) {
+          applyStoredProcessedData(cached.latestStoredData);
+        }
+        setIsInitialDataLoading(false);
+      }
+
       try {
-        const [userData, storedDataList, lastModified] = await Promise.all([
+        setIsRefreshingSavedData(true);
+        const [userData, storedDataList, latestStoredData, lastModified] = await Promise.all([
           getUserInfo(),
-          getUserUploadedData(10),
+          getUserUploadedDataSummary(10, 'storm-masterlist'),
+          getLatestUserUploadedData('storm-masterlist'),
           getLastModifiedInfo()
         ]);
         setUserInfo(userData);
         setStoredData(storedDataList);
+        if (latestStoredData) {
+          applyStoredProcessedData(latestStoredData);
+        }
         setLastModifiedInfo(lastModified);
+        writeCache({
+          userInfo: userData,
+          storedData: storedDataList,
+          lastModifiedInfo: lastModified,
+          latestStoredData: latestStoredData || null
+        });
       } catch (error) {
         console.error('Failed to load user data:', error);
+      } finally {
+        setIsRefreshingSavedData(false);
+        setIsInitialDataLoading(false);
       }
     };
     loadUserData();
@@ -251,35 +307,40 @@ export default function SMDashboard() {
       const data = await scanFiles(monitorFile1, monitorFile2);
       setResults(data);
 
-      // Store data to backend
-      try {
-        const fileNames = `${monitorFile1.name} + ${monitorFile2.name}`;
-
-        await storeUploadedData(
-          fileNames,
-          'storm-masterlist',
-          [], // Raw data not stored for storm masterlist
-          data,
-          {
-            totalRecords: data.length,
-            processedRecords: data.length,
-            dashboardMode: 'storm-masterlist',
-            timestamp: new Date().toISOString()
-          }
-        );
-
-        // Refresh stored data list
-        const [updatedStoredData, lastModified] = await Promise.all([
-          getUserUploadedData(10),
-          getLastModifiedInfo()
-        ]);
-        setStoredData(updatedStoredData);
-        setLastModifiedInfo(lastModified);
-
-      } catch (storeError) {
-        console.error('Failed to store data:', storeError);
-        alert('Data processed successfully but failed to save to database. You can still view the results.');
-      }
+      const fileNames = `${monitorFile1.name} + ${monitorFile2.name}`;
+      storeUploadedData(
+        fileNames,
+        'storm-masterlist',
+        [],
+        data,
+        {
+          totalRecords: data.length,
+          processedRecords: data.length,
+          dashboardMode: 'storm-masterlist',
+          timestamp: new Date().toISOString()
+        }
+      )
+        .then(async () => {
+          const [updatedStoredData, lastModified] = await Promise.all([
+            getUserUploadedDataSummary(10, 'storm-masterlist'),
+            getLastModifiedInfo()
+          ]);
+          setStoredData(updatedStoredData);
+          setLastModifiedInfo(lastModified);
+          writeCache({
+            userInfo,
+            storedData: updatedStoredData,
+            lastModifiedInfo: lastModified,
+            latestStoredData: {
+              processedData: data,
+              fileName: fileNames
+            }
+          });
+        })
+        .catch((storeError) => {
+          console.error('Failed to store data:', storeError);
+          alert('Data processed successfully but failed to save to database. You can still view the results.');
+        });
 
     } catch (error) {
       alert("Error: " + (error.message || error));
@@ -289,11 +350,16 @@ export default function SMDashboard() {
   const handleRefreshStoredData = async () => {
     try {
       const [updatedStoredData, lastModified] = await Promise.all([
-        getUserUploadedData(10),
+        getUserUploadedDataSummary(10, 'storm-masterlist'),
         getLastModifiedInfo()
       ]);
       setStoredData(updatedStoredData);
       setLastModifiedInfo(lastModified);
+      writeCache({
+        userInfo,
+        storedData: updatedStoredData,
+        lastModifiedInfo: lastModified
+      });
     } catch (error) {
       console.error('Failed to refresh stored data:', error);
     }
@@ -301,18 +367,23 @@ export default function SMDashboard() {
 
   const handleLoadStoredData = async (item) => {
     try {
-      // Load the stored data into the results
-      setResults(item.processedData || []);
-      setFilterStatus('ALL');
-      setSelectedRowDetails(null);
-      setShowHistoryPanel(false);
-      
+      setIsStoredDataLoading(true);
+      const fullItem = await getUploadedDataById(item.id);
+      applyStoredProcessedData(fullItem);
+      writeCache({
+        userInfo,
+        storedData,
+        lastModifiedInfo,
+        latestStoredData: fullItem
+      });
       // Update the file inputs to show the loaded file names
       // Note: We can't actually load the original files, but we can show the names
-      alert(`Loaded data from: ${item.fileName}\n${item.processedData?.length || 0} results loaded.`);
+      alert(`Loaded data from: ${fullItem.fileName}\n${fullItem.processedData?.length || 0} results loaded.`);
     } catch (error) {
       console.error('Failed to load stored data:', error);
       alert('Failed to load stored data.');
+    } finally {
+      setIsStoredDataLoading(false);
     }
   };
 
@@ -452,80 +523,130 @@ export default function SMDashboard() {
     );
   };
 
+const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.email || "Unknown User";
+  const currentUserEmail = userInfo?.email || "No email";
+  
+  const lastModifiedName = lastModifiedInfo?.userDisplayName || lastModifiedInfo?.userName || lastModifiedInfo?.userEmail; 
+  
+  // 👇 ADD THIS LINE BACK IN 👇
+  const lastModifiedEmail = lastModifiedInfo?.userEmail || "No email"; 
+  
+  const lastModifiedTimestamp = lastModifiedInfo?.timestamp
+    ? new Date(lastModifiedInfo.timestamp).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : "No previous sync";
+
+  const userInitials = currentUserName !== "Unknown User" ? currentUserName.charAt(0).toUpperCase() : "?";
+
   const headerActions = (
-    <div className="header-actions" style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
-      {/* User Info Bar */}
-      {userInfo && (
-        <div style={{
-          background: 'var(--bg-primary)',
-          border: '1px solid var(--border-light)',
-          borderRadius: '8px',
-          padding: '8px 12px',
-          fontSize: '0.8rem',
-          color: 'var(--text-primary)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px'
-        }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--brand-purple)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-            <circle cx="12" cy="7" r="4"></circle>
-          </svg>
-          <span>{userInfo.email}</span>
-        </div>
+    <div className="header-actions" style={{ display: 'flex', gap: '20px', alignItems: 'center', justifyContent: 'flex-end', paddingRight: '10px' }}>
+      
+      {isRefreshingSavedData && !isInitialDataLoading && (
+        <span style={{ fontSize: '0.75rem', color: 'var(--color-info)', fontWeight: 'bold', animation: 'pulse 1.5s infinite' }}>
+          Refreshing...
+        </span>
       )}
 
-      {/* Last Modified Info */}
-      {lastModifiedInfo && (
-        <div style={{
-          background: 'var(--bg-input)',
-          border: '1px solid var(--border-light)',
-          borderRadius: '8px',
-          padding: '6px 10px',
-          fontSize: '0.7rem',
-          color: 'var(--text-secondary)',
-          maxWidth: '200px'
-        }}>
-          <div style={{ fontWeight: 'bold', color: 'var(--color-danger)', marginBottom: '2px' }}>Last Modified:</div>
-          <div>{lastModifiedInfo.userName}</div>
-          <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}>
-            {new Date(lastModifiedInfo.timestamp).toLocaleString()}
-          </div>
+      {/* 1. Sleek Text-Only Last Modified (SMART RENDERING) */}
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: '1.3' }}>
+        <span style={{ fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)', fontWeight: 'bold' }}>
+          {lastModifiedName ? "Last Modified By" : "Database Status"}
+        </span>
+        
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {lastModifiedName ? (
+            <>
+              {/* Only show the name and the dot if a name exists */}
+              <span style={{ fontSize: '0.85rem', fontWeight: '700', color: 'var(--text-primary)' }}>
+                {lastModifiedName}
+              </span>
+              <span style={{ color: 'var(--text-secondary)', fontSize: '0.7rem' }}>•</span>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                {lastModifiedTimestamp}
+              </span>
+            </>
+          ) : (
+            /* If no name exists, just show the fallback text nicely */
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+              {lastModifiedTimestamp}
+            </span>
+          )}
         </div>
-      )}
+      </div>
 
-      <button className="btn theme-toggle" onClick={toggleTheme} title={isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '8px 12px', background: 'transparent', border: '1px solid var(--border-light)', color: 'var(--text-primary)', borderRadius: '8px', cursor: 'pointer', transition: 'all 0.3s ease', outline: 'none' }}>
-        {isDarkMode ? (
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line>
-            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
-            <line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line>
-            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
-          </svg>
-        ) : (
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
-          </svg>
-        )}
-      </button>
+      {/* Subtle Vertical Divider */}
+      <div style={{ width: '1px', height: '28px', backgroundColor: 'var(--border-light)', opacity: 0.8 }}></div>
 
-      <div className="export-dropdown-container" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setShowExportMenu(false); }} tabIndex={-1}>
-        <button className="btn primary-outline export-toggle-btn" onClick={() => setShowExportMenu(!showExportMenu)}>
-          Export Data 
+      {/* 2. Modern User Profile with Avatar */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: '1.3' }}>
+          <span style={{ fontWeight: '800', fontSize: '0.85rem', color: 'var(--text-primary)' }}>{currentUserName}</span>
+          <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{currentUserEmail}</span>
+        </div>
+        <div style={{
+          width: '36px', height: '36px', borderRadius: '50%',
+          background: 'linear-gradient(135deg, var(--brand-purple), #6b21a8)',
+          color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontWeight: 'bold', fontSize: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
+        }}>
+          {userInitials}
+        </div>
+      </div>
+
+      {/* Subtle Vertical Divider */}
+      <div style={{ width: '1px', height: '28px', backgroundColor: 'var(--border-light)', opacity: 0.8 }}></div>
+
+      {/* 3. Action Buttons (Theme & Export) */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        
+        {/* Circular Theme Toggle */}
+        <button className="btn theme-toggle" onClick={toggleTheme} title="Toggle Theme" style={{ 
+          width: '36px', height: '36px', borderRadius: '50%', padding: 0,
+          background: 'var(--bg-input)', border: '1px solid var(--border-light)', 
+          color: 'var(--text-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          cursor: 'pointer', transition: 'all 0.2s ease', outline: 'none' 
+        }}>
+          {isDarkMode ? (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line>
+              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+              <line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line>
+              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+            </svg>
+          ) : (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+            </svg>
+          )}
         </button>
-        {showExportMenu && (
-          <div className="export-menu">
-            <button onClick={() => handleSpecificExport('ALL')}>Storm Masterlist</button>
-            <button onClick={() => handleSpecificExport('NEW')}>New Sites Only</button>
-            <button onClick={() => handleSpecificExport('REMOVED')}>Removed Only</button>
-            <button onClick={() => handleSpecificExport('MISMATCH')}>Mismatches Only</button>
-            <button onClick={() => handleSpecificExport('UNCHANGED')}>Unchanged Only</button>
-          </div>
-        )}
+
+        {/* Pill-shaped Export Button */}
+        <div className="export-dropdown-container" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setShowExportMenu(false); }} tabIndex={-1} style={{position: 'relative'}}>
+          <button onClick={() => setShowExportMenu(!showExportMenu)} style={{ 
+            height: '36px', borderRadius: '18px', padding: '0 16px',
+            background: 'var(--text-primary)', color: 'var(--bg-primary)',
+            border: 'none', fontWeight: 'bold', fontSize: '0.8rem',
+            cursor: results.length === 0 ? 'not-allowed' : 'pointer',
+            opacity: results.length === 0 ? 0.5 : 1, transition: 'all 0.2s ease', outline: 'none',
+            boxShadow: '0 2px 6px rgba(0,0,0,0.1)'
+          }}>
+            Export Data ▾
+          </button>
+          
+          {showExportMenu && (
+            <div className="export-menu" style={{ position: 'absolute', top: '110%', right: 0, zIndex: 50 }}>
+              {/* Keep your existing export logic here for SMDashboard */}
+              <button onClick={() => handleSpecificExport('ALL')}>Storm Masterlist</button>
+              <button onClick={() => handleSpecificExport('NEW')}>New Sites Only</button>
+              <button onClick={() => handleSpecificExport('REMOVED')}>Removed Only</button>
+              <button onClick={() => handleSpecificExport('MISMATCH')}>Mismatches Only</button>
+              <button onClick={() => handleSpecificExport('UNCHANGED')}>Unchanged Only</button>
+            </div>
+          )}
+        </div>
+
       </div>
     </div>
   );
-
   return (
     <DashboardLayout
       isLoading={pageIsLoading}
@@ -537,8 +658,8 @@ export default function SMDashboard() {
         
         <aside className="sidebar" style={{ width: '320px', minWidth: '320px', flexShrink: 0 }}>
           
-          <div className="sidebar-top-section" ref={sidebarTopRef} style={{ width: '100%', flex: showAiPanel ? '1' : '0 0 350px' }}>
-            <div className={`sidebar-carousel ${showAiPanel ? 'show-ai' : (showHistoryPanel ? 'show-history' : (selectedRowDetails ? 'show-details' : ''))}`}>
+          <div className="sidebar-top-section" ref={sidebarTopRef} style={{ width: '100%', flex: showHistoryPanel ? '1' : '0 0 350px' }}>
+            <div className={`sidebar-carousel ${showHistoryPanel ? 'show-history' : (selectedRowDetails ? 'show-details' : '')}`}>
               
               <div className="carousel-panel">
                 <h3 style={{ marginTop: 0, marginBottom: '15px', fontSize: '1.1rem' }}>Data Input</h3>
@@ -614,14 +735,16 @@ export default function SMDashboard() {
                   {userInfo && (
                     <div style={{ background: 'var(--bg-primary)', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', marginBottom: '15px' }}>
                       <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Logged in as:</div>
-                      <div style={{ fontWeight: 'bold', color: 'var(--brand-purple)' }}>{userInfo.email}</div>
+                      <div style={{ fontWeight: 'bold', color: 'var(--brand-purple)' }}>{currentUserName}</div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{currentUserEmail}</div>
                     </div>
                   )}
 
                   {lastModifiedInfo && (
                     <div style={{ background: 'var(--bg-input)', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', marginBottom: '15px' }}>
                       <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '5px' }}>Last Data Modification:</div>
-                      <div style={{ fontWeight: 'bold', color: 'var(--color-danger)' }}>{lastModifiedInfo.userName}</div>
+                      <div style={{ fontWeight: 'bold', color: 'var(--color-danger)' }}>{lastModifiedName}</div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{lastModifiedEmail}</div>
                       <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
                         {lastModifiedInfo.action} • {lastModifiedInfo.fileName}
                       </div>
@@ -646,7 +769,7 @@ export default function SMDashboard() {
                             </div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                               <div style={{ fontSize: '0.8rem', color: 'var(--color-info)' }}>
-                                {item.dataType} • {item.processedData?.length || 0} results
+                                {item.dataType} • {item.processedCount ?? item.metadata?.processedRecords ?? 0} results
                               </div>
                               <div style={{ fontSize: '0.7rem', color: 'var(--brand-purple)', background: 'var(--bg-input)', padding: '2px 6px', borderRadius: '10px' }}>
                                 Load
@@ -666,7 +789,7 @@ export default function SMDashboard() {
                 </div>
               </div>
 
-              <div className="carousel-panel" style={{ padding: 0 }}>
+              <div className="carousel-panel" style={{ padding: 0, display: 'none' }}>
                 <div style={{ padding: '2rem 1.5rem 1rem 1.5rem', borderBottom: '1px solid var(--border-light)', display: 'flex', alignItems: 'center', gap: '12px', background: isDarkMode ? 'rgba(17, 28, 68, 0.95)' : 'rgba(255, 255, 255, 0.85)', backdropFilter: 'blur(24px)', position: 'sticky', top: 0, zIndex: 10 }}>
                   <button className="back-btn" onClick={() => setShowAiPanel(false)}>
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
@@ -750,7 +873,7 @@ export default function SMDashboard() {
             </div>
           </div>
 
-          <div className="sidebar-map-wrapper" style={{ display: (showAiPanel || showHistoryPanel) ? 'none' : 'flex' }}>
+          <div className="sidebar-map-wrapper" style={{ display: showHistoryPanel ? 'none' : 'flex' }}>
             <div className="map-floating-header">
               <span className="floating-title">Site Visualizer</span>
               <button className="floating-btn" onClick={() => setShowBigMap(true)} aria-label="Expand map">
@@ -763,7 +886,7 @@ export default function SMDashboard() {
               </button>
             </div>
             <div className="mini-map">
-              {!(showAiPanel || showHistoryPanel) && (
+              {!showHistoryPanel && (
                 <MapVisualizer selectedSite={selectedSite} filteredResults={filteredResults} isExpanded={false} />
               )}
             </div>
@@ -789,6 +912,7 @@ export default function SMDashboard() {
 
           <div 
             className={`ai-side-tab ${showAiPanel ? 'active' : ''}`}
+            style={{ display: 'none' }}
             onClick={() => {
               setShowAiPanel(!showAiPanel);
               if (!showAiPanel) {
