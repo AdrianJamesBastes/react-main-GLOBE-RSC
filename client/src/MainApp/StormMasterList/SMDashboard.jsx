@@ -1,4 +1,4 @@
-﻿import { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import useDarkMode from '../../hooks/useDarkMode';
 import useSearchDebounce from '../../hooks/useSearchDebounce';
 import AnalyticsDashboard from '../../Dashboard/AnalyticsDashboard';
@@ -22,6 +22,8 @@ import fileLight from '../../assets/fileLight.png';
 import { useNavigate } from "react-router-dom";
 import { FixedSizeList as List } from 'react-window';
 
+import { parseLocationData, getShortRegionByProvince } from '../../utils/telecom';
+import { cityToProvinceMap } from '../MapDictionary/TelecomDictionaries';
 import DashboardLayout from '../../components/DashboardLayout';
 import useStormMasterlistProcessor from '../../features/storm-masterlist/hooks/useStormMasterlistProcessor';
 import { exportStormMasterlist } from '../../features/storm-masterlist/services/stormMasterlistExport';
@@ -362,14 +364,73 @@ export default function SMDashboard() {
     }
   };
 
-  const handleSpecificExport = (exportCategory) => {
+  const handleSpecificExport = async (exportCategory) => {
     setShowExportMenu(false);
-    if (results.length === 0) {
-      return showThemeModal({
-        title: 'No Data',
-        message: 'No data available to export.',
-        type: 'warning',
-        confirmText: 'OK'
+    if (results.length === 0) return alert("No data to export.");
+
+    const XLSX = await import('xlsx');
+
+    const dataToExport = exportCategory === 'ALL' 
+      ? results.filter(row => row.matchStatus !== 'REMOVED') 
+      : results.filter(row => row.matchStatus === exportCategory);
+
+    if (dataToExport.length === 0) return alert(`There are no "${exportCategory}" sites to export.`);
+
+    const exportStatusOrder = ['NEW', 'MISMATCH', 'REMOVED', 'UNCHANGED'];
+    
+    dataToExport.sort((a, b) => {
+      const orderA = exportStatusOrder.indexOf(a.matchStatus);
+      const orderB = exportStatusOrder.indexOf(b.matchStatus);
+      if (orderA !== orderB) return orderA - orderB;
+
+      const baseA = a.baseLocation || "";
+      const baseB = b.baseLocation || "";
+      return baseA.localeCompare(baseB, undefined, { numeric: true, sensitivity: 'base' });
+    });
+
+    const excelData = dataToExport.map(row => {
+      const geo = parseLocationData(row.baseLocation);
+      
+      let reg = getShortRegionByProvince(row.prov);
+      if (!reg && geo.province) reg = getShortRegionByProvince(geo.province);
+      if (!reg && row.mCity) {
+        const cleanCity = String(row.mCity).toUpperCase().trim();
+        const fallbackProv = cityToProvinceMap[cleanCity];
+        if (fallbackProv) reg = getShortRegionByProvince(fallbackProv);
+      }
+
+      return {
+        "Region": "MIN",
+        "PLA ID": row.plaId === "NEW_SITE" ? "" : (row.plaId || ""),
+        "PLA Status": "",
+        "Area": row.sArea || "",
+        "Region ": (row.region || geo.region || reg) || "",
+        "Province": (row.prov || geo.province) || "",
+        "Municipality": (row.mCity || geo.city) || "",
+        "Barangay": "",
+        "Site Address": row.sAdd || "",
+        "Longitude": row.lng || "",
+        "Latitude": row.lat || "",
+        "Technology": row.techGen || "UDM Only",            
+        "Tech Name/ BTS": row.nmsName || row.techName, 
+        "Tech Description": "",
+        "Tech Status": "",
+        "Site Owner": row.twrC || geo.siteCode || "GLOBE TELECOM",
+        "Territory": row.trt || "",
+        "Hiroshima Severity": row.hSvr || "",
+        "Remarks": row.remarks || "",
+        "Remarks Status": row.matchStatus || ""
+      };
+    });
+
+    const worksheet = XLSX.utils.json_to_sheet(excelData);
+    const headers = Object.keys(excelData[0]);
+    
+    const columnWidths = headers.map(header => {
+      let maxLength = header.length; 
+      excelData.forEach(row => {
+        const cellValue = row[header] ? row[header].toString() : "";
+        if (cellValue.length > maxLength) maxLength = cellValue.length;
       });
     }
 
@@ -410,112 +471,54 @@ export default function SMDashboard() {
       const data = await scanFiles(monitorFile1, monitorFile2);
       setResults(data);
 
-      const fileNames = `${monitorFile1.name} + ${monitorFile2.name}`;
-      
-      storeUploadedData(
-        fileNames,
-        'storm-masterlist',
-        [],
-        data,
-        {
-          totalRecords: data.length,
-          processedRecords: data.length,
-          dashboardMode: 'storm-masterlist',
-          timestamp: new Date().toISOString(),
-          // ðŸš€ PASS THE NAME TO THE DATABASE
-          engineerName: engineerName 
-        }
-      )
-        .then(async () => {
-          const [updatedStoredData, lastModified] = await Promise.all([
-            getUserUploadedDataSummary(10, 'storm-masterlist'),
-            getLastModifiedInfo('storm-masterlist')
-          ]);
-          setStoredData(updatedStoredData);
-          setLastModifiedInfo(lastModified);
-          writeCache({
-            userInfo,
-            storedData: updatedStoredData,
-            lastModifiedInfo: lastModified,
-            latestStoredData: {
-              processedData: data,
-              fileName: fileNames
-            }
-          });
-        })
-        .catch((storeError) => {
-          console.error('Failed to store data:', storeError);
-          showThemeModal({
-            title: 'Save Warning',
-            message: 'Data was processed successfully but failed to save to the database. You can still view the results.',
-            type: 'warning',
-            confirmText: 'OK'
-          });
+      const sendInChunks = (file1, file2) => {
+        return new Promise((resolve, reject) => {
+          if (window.google && window.google.script) {
+             window.google.script.run
+               .withSuccessHandler((resRaw) => {
+                 const res = JSON.parse(resRaw);
+                 if (res.success) resolve(res.data);
+                 else reject(res.error);
+               })
+               .withFailureHandler(reject)
+               .processCSVComparison(file1, file2);
+          } else {
+             setTimeout(() => {
+               const mockData = [];
+               const statuses = ["NEW", "MISMATCH", "UNCHANGED", "REMOVED"];
+               for(let i=1; i<=50; i++) {
+                 mockData.push({ 
+                   plaId: `MIN_${String(i).padStart(4, '0')}`, 
+                   matchStatus: statuses[(i-1) % statuses.length], 
+                   techName: `SITENAME${i}DDN`, 
+                   baseLocation: `SITENAME${i}DDN`,
+                   techGen: "4G-FDD",
+                   nmsName: `SITENAME${i}DDNLYK`,
+                   remarks: "Mock data generated.",
+                   lat: (7.0 + (Math.random() * 0.5)).toFixed(5), 
+                   lng: (125.4 + (Math.random() * 0.5)).toFixed(5),
+                   sArea: "N/A", prov: "UNKNOWN", mCity: "UNKNOWN", sAdd: "N/A", trt: "N/A", hSvr: "N/A", twrC: "N/A"
+                 });
+               }
+               resolve(mockData);
+             }, 1000);
+          }
         });
+      };
 
+      const data = await sendInChunks(text1, text2);
+      setResults(data);
+      setIsLoading(false);
     } catch (error) {
-      showThemeModal({
-        title: 'Scan Error',
-        message: "Error: " + (error.message || error),
-        type: 'error',
-        confirmText: 'OK'
-      });
-    }
-  };
-
-  const handleRefreshStoredData = async () => {
-    try {
-      const [updatedStoredData, lastModified] = await Promise.all([
-        getUserUploadedDataSummary(10, 'storm-masterlist'),
-        getLastModifiedInfo('storm-masterlist')
-      ]);
-      setStoredData(updatedStoredData);
-      setLastModifiedInfo(lastModified);
-      writeCache({
-        userInfo,
-        storedData: updatedStoredData,
-        lastModifiedInfo: lastModified
-      });
-    } catch (error) {
-      console.error('Failed to refresh stored data:', error);
-    }
-  };
-
-  const handleLoadStoredData = async (item) => {
-    try {
-      setIsStoredDataLoading(true);
-      const fullItem = await getUploadedDataById(item.id);
-      applyStoredProcessedData(fullItem);
-      writeCache({
-        userInfo,
-        storedData,
-        lastModifiedInfo,
-        latestStoredData: fullItem
-      });
-      // Update the file inputs to show the loaded file names
-      // Note: We can't actually load the original files, but we can show the names
-      showThemeModal({
-        title: 'Data Loaded',
-        message: `Loaded data from: ${fullItem.fileName}\n${fullItem.processedData?.length || 0} results loaded.`,
-        type: 'info',
-        confirmText: 'OK'
-      });
-    } catch (error) {
-      console.error('Failed to load stored data:', error);
-      showThemeModal({
-        title: 'Load Failed',
-        message: 'Failed to load stored data.',
-        type: 'error',
-        confirmText: 'OK'
-      });
-    } finally {
-      setIsStoredDataLoading(false);
+      alert("Error: " + error);
+      setIsLoading(false);
     }
   };
 
   const stats = useMemo(() => {
     const siteMap = new Map();
     results.forEach(r => {
+      // FIX: Use baseLocation as the true unique identifier for sites
       const key = r.baseLocation; 
       if (!siteMap.has(key)) siteMap.set(key, r.matchStatus);
     });
@@ -548,10 +551,12 @@ export default function SMDashboard() {
         const orderB = statusOrder.indexOf(b.matchStatus);
         if (orderA !== orderB) return orderA - orderB;
 
+        // Sort by baseLocation so physical sites stay grouped together
         const baseA = a.baseLocation || "";
         const baseB = b.baseLocation || "";
         const baseCompare = baseA.localeCompare(baseB, undefined, { numeric: true, sensitivity: 'base' });
         
+        // If same base location, sort by the specific tech name
         if (baseCompare === 0) return (a.nmsName || "").localeCompare(b.nmsName || "");
         return baseCompare;
       });
@@ -573,80 +578,6 @@ export default function SMDashboard() {
     setTimeout(() => {
       navigate(path);
     }, 1000); 
-  };
-
-  const VirtualizedRow = ({ index, style }) => {
-    const row = filteredResults[index];
-    const prevRow = filteredResults[index - 1];
-    const nextRow = filteredResults[index + 1];
-
-    const isExactRow = selectedSite?.nmsName === row.nmsName;
-    const isSameGroup = selectedSite?.baseLocation === row.baseLocation && !isExactRow;
-    const isFirstOfGroup = !prevRow || prevRow.baseLocation !== row.baseLocation;
-    const isLastOfGroup = !nextRow || nextRow.baseLocation !== row.baseLocation;
-
-    let rowStyle = {
-      ...style,
-      display: 'flex',
-      alignItems: 'center',
-      padding: '0 20px',
-      cursor: "pointer", 
-      transition: "background-color 0.2s",
-      borderBottom: isLastOfGroup ? "2px solid var(--border-color)" : "1px solid rgba(128,128,128,0.1)",
-      backgroundColor: isExactRow ? "rgba(0, 123, 255, 0.2)" : (isSameGroup ? "rgba(128, 128, 128, 0.15)" : "var(--bg-input)"),
-      boxSizing: 'border-box',
-      fontSize: '0.85rem'
-    };
-
-    const columnStyle = {
-      whiteSpace: 'nowrap',
-      overflow: 'hidden',
-      textOverflow: 'ellipsis',
-      paddingRight: '15px',
-      boxSizing: 'border-box' 
-    };
-
-    return (
-      <div 
-        style={rowStyle} 
-        className="row-hover"
-        onClick={() => {
-          const lat = parseFloat(row.lat);
-          const lng = parseFloat(row.lng);
-          
-          if (!isNaN(lat) && !isNaN(lng)) {
-            setSelectedSite({ lat, lng, id: row.plaId, baseLocation: row.baseLocation, nmsName: row.nmsName, zoom: 18 });
-            setSelectedRowDetails(row);
-          } else {
-            console.warn("Invalid coordinates for site:", row.plaId);
-            setSelectedRowDetails(row); 
-          }
-        }}
-      >
-        <div style={{ ...columnStyle, width: '10%', fontWeight: 'bold' }}>
-          {isFirstOfGroup ? (row.plaId === "NEW_SITE" ? "N/A" : row.plaId) : ""}
-        </div>
-        <div style={{ ...columnStyle, width: '10%' }}>
-          {isFirstOfGroup && (
-            <span className={`status-badge ${(row.matchStatus || 'UNCHANGED').toLowerCase()}`} style={{ fontSize: '0.7rem' }}>
-              {row.matchStatus || 'UNCHANGED'}
-            </span>
-          )}
-        </div>
-        <div style={{ ...columnStyle, width: '20%', fontWeight: '500' }}>
-          {isFirstOfGroup ? row.baseLocation : ""}
-        </div>
-        <div style={{ ...columnStyle, width: '10%', fontWeight: 'bold', color: row.techGen?.includes('5G') ? 'var(--color-success)' : (row.techGen?.includes('4G') ? 'var(--color-info)' : 'var(--text-secondary)') }}>
-          {row.techGen}
-        </div>
-        <div style={{ ...columnStyle, width: '25%', fontFamily: 'monospace', color: 'var(--color-info)', fontWeight: 'bold' }}>
-          {row.nmsName}
-        </div>
-        <div style={{ ...columnStyle, width: '25%', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-          {isFirstOfGroup ? row.remarks : ""}
-        </div>
-      </div>
-    );
   };
 
 const currentUserName = userInfo?.displayName || userInfo?.name || "Unknown User";
@@ -1019,10 +950,7 @@ const currentUserName = userInfo?.displayName || userInfo?.name || "Unknown User
           <div className="output-card">
             <div className="dashboard-container">
               <AnalyticsDashboard data={results} activeFilter={filterStatus} onFilterChange={setFilterStatus} isDarkMode={isDarkMode} />
-              
-              {/* ðŸš€ THE DYNAMIC COMPACT MODE CLASS */}
-              <div className={`cards-section ${results.length > 0 ? 'compact-mode' : ''}`}>
-                
+              <div className="cards-section">
                 <div className={`stat-card luxury-glass total ${filterStatus === 'ALL' ? 'active' : ''}`} onClick={() => setFilterStatus('ALL')} style={{cursor: 'pointer'}}>
                   <img src={isDarkMode ? ICONS.checkDark : ICONS.checkLight} className="stat-icon" alt="Total" />
                   <div className="stat-label">Total Validated</div>
@@ -1043,7 +971,7 @@ const currentUserName = userInfo?.displayName || userInfo?.name || "Unknown User
 
                 <div className={`stat-card luxury-glass removed ${filterStatus === 'REMOVED' ? 'active' : ''}`} onClick={() => setFilterStatus('REMOVED')} style={{cursor: 'pointer'}}>
                   <img src={isDarkMode ? ICONS.removedDark : ICONS.removedLight} className="stat-icon" alt="Removed" />
-                  <div className="stat-label">Removed</div>
+                  <div className="stat-label">Missing (Removed)</div>
                   <div className="stat-value">{stats.removed}</div>
                 </div>
 
@@ -1110,37 +1038,69 @@ const currentUserName = userInfo?.displayName || userInfo?.name || "Unknown User
 
             <div className="output-box" style={{ flex: 1, display: 'flex', flexDirection: 'column', backgroundColor: 'var(--bg-primary)' }}>
               {results.length > 0 ? (
-                <div className="table-wrapper" style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                  
-                  <div style={{ 
-                    display: 'flex', 
-                    padding: '12px 35px 12px 20px', 
-                    fontWeight: 'bold', 
-                    borderBottom: '2px solid var(--border-color)', 
-                    backgroundColor: 'var(--bg-secondary)',
-                    textTransform: 'uppercase',
-                    fontSize: '0.8rem'
-                  }}>
-                    <div style={{ width: '10%', paddingRight: '15px', boxSizing: 'border-box' }}>PLA_ID</div>
-                    <div style={{ width: '10%', paddingRight: '15px', boxSizing: 'border-box' }}>Status</div>
-                    <div style={{ width: '20%', paddingRight: '15px', boxSizing: 'border-box' }}>Base Name</div>
-                    <div style={{ width: '10%', color: 'var(--color-info)', paddingRight: '15px', boxSizing: 'border-box' }}>Tech</div>
-                    <div style={{ width: '25%', color: 'var(--color-info)', paddingRight: '15px', boxSizing: 'border-box' }}>BCF NAME</div>
-                    <div style={{ width: '25%', paddingRight: '15px', boxSizing: 'border-box' }}>Remarks</div>
-                  </div>
-                  
-                  <div style={{ flex: 1, width: '100%' }}>
-                    <List
-                      height={500} 
-                      itemCount={filteredResults.length}
-                      itemSize={60}
-                      width={'100%'}
-                      overscanCount={10}
-                    >
-                      {VirtualizedRow}
-                    </List>
-                  </div>
-                  
+                <div className="table-wrapper">
+                  <table className="result-table">
+                    <thead>
+                      <tr>
+                        <th>PLA_ID</th>
+                        <th>Status</th>
+                        <th>Base Name</th>
+                        <th style={{color: '#1a73e8'}}>Technology</th>
+                        <th style={{color: '#1a73e8'}}>BCF NAME</th>
+                        <th>Remarks</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredResults.map((row, i) => {
+                        // FIX: Group visually using baseLocation instead of plaId
+                        const isExactRow = selectedSite?.nmsName === row.nmsName;
+                        const isSameGroup = selectedSite?.baseLocation === row.baseLocation && !isExactRow;
+                        
+                        let rowStyle = { cursor: "pointer", transition: "background-color 0.2s" };
+                        if (isExactRow) rowStyle.backgroundColor = "rgba(0, 123, 255, 0.2)";
+                        else if (isSameGroup) rowStyle.backgroundColor = "rgba(128, 128, 128, 0.15)";
+
+                        const nextRow = filteredResults[i + 1];
+                        const isLastOfGroup = !nextRow || nextRow.baseLocation !== row.baseLocation;
+                        if (isLastOfGroup) rowStyle.borderBottom = "2px solid var(--border-color)";
+
+                        const prevRow = filteredResults[i - 1];
+                        const isFirstOfGroup = !prevRow || prevRow.baseLocation !== row.baseLocation;
+
+                        return (
+                          <tr key={`${row.baseLocation}-${row.nmsName}-${i}`} className="row-hover" style={rowStyle}
+                            onClick={() => {
+                              const lat = parseFloat(row.lat);
+                              const lng = parseFloat(row.lng);
+                              setSelectedSite({ lat, lng, id: row.plaId, baseLocation: row.baseLocation, nmsName: row.nmsName, zoom: 18 });
+                              setSelectedRowDetails(row);
+                            }}
+                          >
+                            <td className="font-bold">
+                              {isFirstOfGroup ? (row.plaId === "NEW_SITE" ? "N/A" : row.plaId) : ""}
+                            </td>
+                            <td>
+                              {isFirstOfGroup && (
+                                <span className={`status-badge ${row.matchStatus.toLowerCase()}`}>
+                                  {row.matchStatus}
+                                </span>
+                              )}
+                            </td>
+                            <td style={{ fontWeight: '500' }}>{isFirstOfGroup ? row.baseLocation : ""}</td>
+                            <td style={{ fontWeight: 'bold', color: row.techGen?.includes('5G') ? '#28a745' : (row.techGen?.includes('4G') ? '#007bff' : '#666') }}>
+                              {row.techGen}
+                            </td>
+                            <td style={{ fontFamily: 'monospace', color: '#1a73e8', fontWeight: 'bold' }}>
+                              {row.nmsName}
+                            </td>
+                            <td style={{ fontSize: '0.75rem', color: 'var(--text-secondary)'}}>
+                              {isFirstOfGroup ? row.remarks : ""}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               ) : (
                 // ðŸš€ ENTERPRISE SKELETON LOADER FOR STORM MASTER LIST
@@ -1212,5 +1172,3 @@ const currentUserName = userInfo?.displayName || userInfo?.name || "Unknown User
     </DashboardLayout>
   );
 }
-
-

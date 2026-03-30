@@ -22,7 +22,11 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
 
 import * as XLSX from 'xlsx';
 import { useNavigate } from "react-router-dom";
-import { FixedSizeList as List, VariableSizeList } from 'react-window';
+
+// Removed getTechSplits since we do vertical rows now!
+import { parseLocationData, getShortRegionByProvince } from '../../utils/telecom';
+// Added the dictionary import so your Triple Fallback works!
+import { cityToProvinceMap } from '../MapDictionary/TelecomDictionaries';
 import DashboardLayout from '../../components/DashboardLayout';
 import { ThemedButton, ThemedBadge } from '../../components/common';
 import '../../styles/Dashboard_styles.css';
@@ -344,17 +348,82 @@ const readCache = () => {
             }
           }
 
-          const jsonData = XLSX.utils.sheet_to_json(worksheet, { 
-            range: headerRowIndex, 
-            defval: "" 
-          });
+  const handleSpecificExport = (exportCategory) => {
+    setShowExportMenu(false);
+    if (results.length === 0) return alert("No data to export.");
 
-          resolve(jsonData);
-        } catch {
-          reject(new Error("Failed to parse file."));
+    const dataToExport = exportCategory === 'ALL' ? results : results.filter(row => row.matchStatus === exportCategory);
+    if (dataToExport.length === 0) return alert(`There are no "${exportCategory}" sites to export.`);
+
+    // Using flatMap to create multiple rows per site based on Technology!
+    const excelData = dataToExport.flatMap(row => {
+      const geo = parseLocationData(row.baseLocation);
+      
+      // FALLBACK 1: Try raw UDM province
+      let reg = getShortRegionByProvince(row.prov);
+
+      // FALLBACK 2: Try parsed Site Name province
+      if (!reg && geo.province) {
+        reg = getShortRegionByProvince(geo.province);
+      }
+
+      // FALLBACK 3: City guess
+      if (!reg && row.mCity) {
+        const cleanCity = String(row.mCity).toUpperCase().trim();
+        const fallbackProv = cityToProvinceMap[cleanCity];
+        if (fallbackProv) reg = getShortRegionByProvince(fallbackProv);
+      }
+
+      // HELPER: This creates the exact Excel row structure you want
+      const buildExcelRow = (techLabel, specificTechName) => ({
+        "Region": "MIN",
+        "PLA ID": row.plaId || "",
+        "PLA Status": "",
+        "Area": row.sArea || "",
+        "Region ": (geo.region || reg) || "",
+        "Province": (geo.province || row.prov) || "",
+        "City/Municipality": (geo.city || row.mCity) || "",
+        "Barangay": "",
+        "Site Address": row.sAdd || "",
+        "Longitude": row.lng || "",
+        "Latitude": row.lat || "",
+        "Technology": techLabel,            // <--- Outputting the 2G/4G/5G label
+        "Tech Name/ BTS": specificTechName, // <--- Outputting the specific string
+        "Tech Description": "",
+        "Tech Status": "",
+        "Site Owner": row.siteOwner || geo.siteCode || "GLOBE TELECOM",
+        "Territory": row.trt || "",
+        "Hiroshima Severity": row.hSvr || "",
+        "Remarks": row.remarks || "",
+        "Remarks Status": row.matchStatus || ""
+      });
+
+      let expandedRows = [];
+
+      // SCENARIO A: If the site was REMOVED, it only exists in UDM, so it has no NMS splits.
+      if (row.matchStatus === 'REMOVED') {
+        expandedRows.push(buildExcelRow("UDM Only", row.techName));
+      } 
+      // SCENARIO B: Split the NMS strings into vertical rows!
+      else {
+        // Look for the original strings sent from the backend and split them by the " | " separator
+        if (row.original2G) {
+          row.original2G.split(" | ").forEach(nmsName => expandedRows.push(buildExcelRow("2G", nmsName)));
         }
-      };
-      reader.onerror = (err) => reject(err);
+        if (row.original4G) {
+          row.original4G.split(" | ").forEach(nmsName => expandedRows.push(buildExcelRow("4G", nmsName)));
+        }
+        if (row.original5G) {
+          row.original5G.split(" | ").forEach(nmsName => expandedRows.push(buildExcelRow("5G", nmsName)));
+        }
+        
+        // Safety net: If a row somehow has no tech strings, just print the base name.
+        if (expandedRows.length === 0) {
+          expandedRows.push(buildExcelRow("Unknown", row.techName));
+        }
+      }
+
+      return expandedRows; // flatMap merges all these into the main Excel sheet!
     });
   };
 
@@ -381,163 +450,10 @@ const readCache = () => {
 
     let engineerName = localStorage.getItem('globe_rsc_engineer');
     
-    if (!engineerName) {
-      return askForEngineerName();
-    }
-
-    setIsLoading(true);
-    setResults([]);
-    setSelectedRowDetails(null);
-
-    try {
-      const nmsData = await readUniversalFile(monitorFile1);
-      if (nmsData.length === 0) throw new Error("NMS File is empty.");
-
-      let result;
-      let processedData;
-
-      if (dashboardMode === 'wireless') {
-        const masterData = await readUniversalFile(monitorFile2);
-        result = processWirelessAlarms(nmsData, masterData);
-        processedData = result.data;
-      } else {
-        result = processTransportAlarms(nmsData);
-        processedData = result.data.map(item => ({
-          alert: item.alarm || "N/A",
-          dn: item.li || "N/A",
-          name: item.sn || "N/A",
-          pla: item.severity || "N/A",
-          count: item.count,
-          rawRows: item.rawRows
-        }));
-      }
-
-      if (result.success && processedData.length > 0) {
-        setResults(processedData);
-        handleSidebarViewChange('analytics');
-        setIsSidebarCollapsed(false);
-
-        const fileNames = dashboardMode === 'wireless'
-          ? `${monitorFile1.name} + ${monitorFile2.name}`
-          : monitorFile1.name;
-
-       storeUploadedData(
-          fileNames,
-          dashboardMode,
-          [],
-          processedData,
-          {
-            totalRecords: nmsData.length,
-            processedRecords: processedData.length,
-            dashboardMode,
-            timestamp: new Date().toISOString(),
-            // ðŸš€ PASS THE NAME TO THE DATABASE
-            engineerName: engineerName
-          }
-        )
-          .then(async () => {
-            const [updatedStoredData, lastModified] = await Promise.all([
-              getUserUploadedDataSummary(10, dashboardMode),
-              getLastModifiedInfo(dashboardMode)
-            ]);
-            setStoredData(updatedStoredData);
-            setLastModifiedInfo(lastModified);
-            writeCache({
-              userInfo,
-              storedData: updatedStoredData,
-              lastModifiedInfo: lastModified,
-              latestStoredData: {
-                processedData,
-                fileName: fileNames
-              }
-            });
-          })
-          .catch((storeError) => {
-            console.error('Failed to store data:', storeError);
-            showThemeModal({
-              title: 'Save Warning',
-              message: 'Data was processed successfully but failed to save to database. You can still view the results.',
-              type: 'warning',
-              confirmText: 'OK'
-            });
-          });
-      } else {
-        showThemeModal({
-          title: result.success ? 'No Matches' : 'Processing Error',
-          message: result.success ? 'No matching alarms were found.' : `Error: ${result.error}`,
-          type: result.success ? 'info' : 'error',
-          confirmText: 'OK'
-        });
-      }
-
-    } catch (error) {
-      showThemeModal({
-        title: 'Read Error',
-        message: `Error reading files: ${error.message}`,
-        type: 'error',
-        confirmText: 'OK'
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleExport = () => {
-    if (results.length === 0) return showThemeModal({
-      title: 'No Data',
-      message: 'No data available to export.',
-      type: 'warning',
-      confirmText: 'OK'
-    });
-    const flattenedData = [];
-    let originalNMSHeaders = [];
-    if (results[0] && results[0].rawRows && results[0].rawRows.length > 0) {
-      originalNMSHeaders = Object.keys(results[0].rawRows[0]);
-    }
-
-    const strictHeaderOrder = dashboardMode === 'wireless'
-      ? ["Severity Rank", "Total Repetitions", "Occurrence #", "Masterlist PLA_ID", "Masterlist Site Name", ...originalNMSHeaders]
-      : ["Severity Rank", "Total Repetitions", "Occurrence #", "Severity", "Site Name (Alarm Source)", "Location Info", "Alarm Name", ...originalNMSHeaders];
-
-    results.forEach((group, groupIndex) => {
-      if (group.rawRows) {
-        group.rawRows.forEach((rawRow, idx) => {
-          const formattedRawRow = {};
-          originalNMSHeaders.forEach(key => {
-            const value = rawRow[key];
-            const isTimeCol = key.toLowerCase().includes('time') || key.toLowerCase().includes('date') || key.toLowerCase().includes('stamp');
-            if (isTimeCol && typeof value === 'number' && value > 30000) {
-              const dateObj = new Date(Math.round((value - 25569) * 86400 * 1000));
-              const m = dateObj.getUTCMonth() + 1;
-              const d = dateObj.getUTCDate();
-              const y = dateObj.getUTCFullYear();
-              const hh = String(dateObj.getUTCHours()).padStart(2, '0');
-              const mm = String(dateObj.getUTCMinutes()).padStart(2, '0');
-              const ss = String(dateObj.getUTCSeconds()).padStart(2, '0');
-              formattedRawRow[key] = `${m}/${d}/${y} ${hh}:${mm}:${ss}`;
-            } else {
-              formattedRawRow[key] = (value === null || value === undefined) ? "" : value;
-            }
-          });
-
-          flattenedData.push({
-            "Severity Rank": groupIndex + 1,
-            "Total Repetitions": group.count,
-            "Occurrence #": idx + 1,
-            [dashboardMode === 'wireless' ? "Masterlist PLA_ID" : "Severity"]: group.pla || "N/A",
-            [dashboardMode === 'wireless' ? "Masterlist Site Name" : "Site Name (Alarm Source)"]: group.name || "N/A",
-            [dashboardMode === 'wireless' ? "Distinguished Name" : "Location Info"]: group.dn || "N/A",
-            [dashboardMode === 'wireless' ? "Alarm Text" : "Alarm Name"]: group.alert || "N/A",
-            ...formattedRawRow
-          });
-        });
-      }
-    });
-
-    const worksheet = XLSX.utils.json_to_sheet(flattenedData, { header: strictHeaderOrder });
-    const columnWidths = strictHeaderOrder.map(header => {
-      let maxLength = header.length;
-      flattenedData.forEach(row => {
+    // Auto-size the Excel columns
+    const columnWidths = headers.map(header => {
+      let maxLength = header.length; 
+      excelData.forEach(row => {
         const cellValue = row[header] ? row[header].toString() : "";
         if (cellValue.length > maxLength) maxLength = cellValue.length;
       });
@@ -545,8 +461,13 @@ const readCache = () => {
     });
     worksheet['!cols'] = columnWidths;
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Raw Alarms");
-    XLSX.writeFile(workbook, `${dashboardMode.toUpperCase()}_SiteAlerts_${new Date().toISOString().split('T')[0]}.xlsx`);
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Masterlist Data");
+    
+    // Generate the file name with today's date
+    const dateStr = new Date().toISOString().split('T')[0];
+    const fileName = `StormMasterlist_${exportCategory === 'ALL' ? 'Complete' : exportCategory}_${dateStr}.xlsx`;
+    
+    XLSX.writeFile(workbook, fileName);
   };
 
   const handleLoadStoredData = async (storedDataItem) => {
