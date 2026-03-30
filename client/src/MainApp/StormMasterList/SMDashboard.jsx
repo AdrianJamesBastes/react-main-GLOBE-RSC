@@ -840,23 +840,32 @@ const currentUserName = userInfo?.displayName || userInfo?.name || "Unknown User
                     {storedData.length > 0 ? (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                         {storedData.map((item, index) => (
-                          <div key={item.id} style={{ background: 'var(--bg-primary)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-light)', cursor: 'pointer', transition: 'all 0.2s' }} onClick={() => handleLoadStoredData(item)}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
-                              <div style={{ fontWeight: 'bold', color: 'var(--text-primary)', fontSize: '0.9rem', flex: 1, marginRight: '10px' }}>
-                                {item.fileName.length > 30 ? item.fileName.substring(0, 30) + '...' : item.fileName}
+                          <div key={item.id} style={{ background: 'var(--bg-primary)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-light)', cursor: 'pointer', transition: 'all 0.2s' }} onClick={() => handleLoadStoredData(item)} className="row-hover">
+                            
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
+                              <div style={{ fontWeight: 'bold', color: 'var(--text-primary)', fontSize: '0.9rem', flex: 1, marginRight: '10px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {item.fileName}
                               </div>
                               <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
                                 {new Date(item.uploadDate).toLocaleDateString()}
                               </div>
                             </div>
+                            
+                            {/* 🚀 ADDED THE ENGINEER NAME DISPLAY HERE */}
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                              Ran by: <span style={{color: 'var(--text-primary)', fontWeight: '600'}}>{item.metadata?.engineerName || "Workspace User"}</span>
+                            </div>
+
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                               <div style={{ fontSize: '0.8rem', color: 'var(--color-info)' }}>
-                                {item.dataType} â€¢ {item.processedCount ?? item.metadata?.processedRecords ?? 0} results
+                                {item.dataType} • {item.processedCount ?? item.metadata?.processedRecords ?? 0} results
                               </div>
-                              <div style={{ fontSize: '0.7rem', color: 'var(--brand-purple)', background: 'var(--bg-input)', padding: '2px 6px', borderRadius: '10px' }}>
-                                Load
+                              <div style={{ fontSize: '0.7rem', color: 'var(--bg-primary)', background: 'var(--text-primary)', fontWeight: 'bold', padding: '4px 10px', borderRadius: '12px' }}>
+                                Load Data
                               </div>
                             </div>
+
                           </div>
                         ))}
                       </div>

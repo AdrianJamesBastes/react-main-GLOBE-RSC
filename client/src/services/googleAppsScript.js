@@ -30,9 +30,9 @@ function promisifyGasCall(functionName, ...args) {
   });
 }
 
-// Development/fallback API endpoint (for non-GAS environments)
+// 🚀 DEVELOPMENT API ENDPOINT
 // UPDATE THIS URL when you create a new GAS deployment
-const API_BASE_URL = 'https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec';
+const API_BASE_URL = 'https://script.google.com/a/macros/umindanao.edu.ph/s/AKfycbwZbMC8pCRlYw_uORG-c55zSdNVKfZeRdxPH18sefsRi5XUg_D5CkMoz_HZ4PMWFXc7ZA/exec';
 
 /**
  * Store uploaded data to Google Sheets
@@ -40,18 +40,14 @@ const API_BASE_URL = 'https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec
 export function storeUploadedData(fileName, dataType, rawData, processedData, metadata = {}) {
   const runner = getGoogleScriptRunner();
   
-  // If in GAS environment, use google.script.run
   if (runner) {
     return promisifyGasCall('storeUploadedData', fileName, dataType, rawData, processedData, metadata)
       .then(result => {
-        if (!result.success) {
-          throw new Error(result.error || 'Failed to store data');
-        }
+        if (!result.success) throw new Error(result.error || 'Failed to store data');
         return result;
       });
   }
   
-  // Otherwise, use fetch() for development
   return fetch(API_BASE_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -66,9 +62,7 @@ export function storeUploadedData(fileName, dataType, rawData, processedData, me
   })
   .then(response => response.json())
   .then(data => {
-    if (!data.success) {
-      throw new Error(data.error || 'Failed to store data');
-    }
+    if (!data.success) throw new Error(data.error || 'Failed to store data');
     return data;
   });
 }
@@ -79,18 +73,14 @@ export function storeUploadedData(fileName, dataType, rawData, processedData, me
 export function getUserUploadedData(limit = 20, dataType = '') {
   const runner = getGoogleScriptRunner();
   
-  // If in GAS environment, use google.script.run
   if (runner) {
     return promisifyGasCall('getUserUploadedData', limit, dataType)
       .then(result => {
-        if (!result.success) {
-          throw new Error(result.error || 'Failed to retrieve data');
-        }
+        if (!result.success) throw new Error(result.error || 'Failed to retrieve data');
         return result.data;
       });
   }
   
-  // Otherwise, use fetch() for development
   return fetch(API_BASE_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -102,22 +92,21 @@ export function getUserUploadedData(limit = 20, dataType = '') {
   })
   .then(response => response.json())
   .then(data => {
-    if (!data.success) {
-      throw new Error(data.error || 'Failed to retrieve data');
-    }
+    if (!data.success) throw new Error(data.error || 'Failed to retrieve data');
     return data.data;
   });
 }
 
+/**
+ * Retrieve summary of user's uploaded data (Filtered by Dashboard)
+ */
 export function getUserUploadedDataSummary(limit = 20, dataType = '') {
   const runner = getGoogleScriptRunner();
 
   if (runner) {
     return promisifyGasCall('getUserUploadedDataSummary', limit, dataType)
       .then(result => {
-        if (!result.success) {
-          throw new Error(result.error || 'Failed to retrieve data summary');
-        }
+        if (!result.success) throw new Error(result.error || 'Failed to retrieve data summary');
         return result.data;
       });
   }
@@ -133,22 +122,21 @@ export function getUserUploadedDataSummary(limit = 20, dataType = '') {
   })
   .then(response => response.json())
   .then(data => {
-    if (!data.success) {
-      throw new Error(data.error || 'Failed to retrieve data summary');
-    }
+    if (!data.success) throw new Error(data.error || 'Failed to retrieve data summary');
     return data.data;
   });
 }
 
+/**
+ * Retrieve specific data entry by ID
+ */
 export function getUploadedDataById(dataId) {
   const runner = getGoogleScriptRunner();
 
   if (runner) {
     return promisifyGasCall('getUploadedDataById', dataId)
       .then(result => {
-        if (!result.success) {
-          throw new Error(result.error || 'Failed to retrieve stored data');
-        }
+        if (!result.success) throw new Error(result.error || 'Failed to retrieve stored data');
         return result.data;
       });
   }
@@ -163,22 +151,21 @@ export function getUploadedDataById(dataId) {
   })
   .then(response => response.json())
   .then(data => {
-    if (!data.success) {
-      throw new Error(data.error || 'Failed to retrieve stored data');
-    }
+    if (!data.success) throw new Error(data.error || 'Failed to retrieve stored data');
     return data.data;
   });
 }
 
+/**
+ * Retrieve the absolute latest data entry (Filtered by Dashboard)
+ */
 export function getLatestUserUploadedData(dataType = '') {
   const runner = getGoogleScriptRunner();
 
   if (runner) {
     return promisifyGasCall('getLatestUserUploadedData', dataType)
       .then(result => {
-        if (!result.success) {
-          throw new Error(result.error || 'Failed to retrieve latest stored data');
-        }
+        if (!result.success) throw new Error(result.error || 'Failed to retrieve latest stored data');
         return result.data;
       });
   }
@@ -193,9 +180,7 @@ export function getLatestUserUploadedData(dataType = '') {
   })
   .then(response => response.json())
   .then(data => {
-    if (!data.success) {
-      throw new Error(data.error || 'Failed to retrieve latest stored data');
-    }
+    if (!data.success) throw new Error(data.error || 'Failed to retrieve latest stored data');
     return data.data;
   });
 }
@@ -206,18 +191,14 @@ export function getLatestUserUploadedData(dataType = '') {
 export function deleteUploadedData(dataId) {
   const runner = getGoogleScriptRunner();
   
-  // If in GAS environment, use google.script.run
   if (runner) {
     return promisifyGasCall('deleteUploadedData', dataId)
       .then(result => {
-        if (!result.success) {
-          throw new Error(result.error || 'Failed to delete data');
-        }
+        if (!result.success) throw new Error(result.error || 'Failed to delete data');
         return result;
       });
   }
   
-  // Otherwise, use fetch() for development
   return fetch(API_BASE_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -228,9 +209,7 @@ export function deleteUploadedData(dataId) {
   })
   .then(response => response.json())
   .then(data => {
-    if (!data.success) {
-      throw new Error(data.error || 'Failed to delete data');
-    }
+    if (!data.success) throw new Error(data.error || 'Failed to delete data');
     return data;
   });
 }
@@ -241,18 +220,14 @@ export function deleteUploadedData(dataId) {
 export function getUserInfo() {
   const runner = getGoogleScriptRunner();
   
-  // If in GAS environment, use google.script.run
   if (runner) {
     return promisifyGasCall('getUserInfo')
       .then(result => {
-        if (!result.success) {
-          throw new Error(result.error || 'Failed to get user info');
-        }
+        if (!result.success) throw new Error(result.error || 'Failed to get user info');
         return result.data;
       });
   }
   
-  // Otherwise, use fetch() for development
   return fetch(API_BASE_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -262,31 +237,25 @@ export function getUserInfo() {
   })
   .then(response => response.json())
   .then(data => {
-    if (!data.success) {
-      throw new Error(data.error || 'Failed to get user info');
-    }
+    if (!data.success) throw new Error(data.error || 'Failed to get user info');
     return data.data;
   });
 }
 
 /**
- * Get last modified information
+ * Get last modified information (Filtered by Dashboard)
  */
 export function getLastModifiedInfo(dataType = '') {
   const runner = getGoogleScriptRunner();
   
-  // If in GAS environment, use google.script.run
   if (runner) {
     return promisifyGasCall('getLastModifiedInfo', dataType)
       .then(result => {
-        if (!result.success) {
-          throw new Error(result.error || 'Failed to get last modified info');
-        }
+        if (!result.success) throw new Error(result.error || 'Failed to get last modified info');
         return result.data;
       });
   }
   
-  // Otherwise, use fetch() for development
   return fetch(API_BASE_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -297,9 +266,7 @@ export function getLastModifiedInfo(dataType = '') {
   })
   .then(response => response.json())
   .then(data => {
-    if (!data.success) {
-      throw new Error(data.error || 'Failed to get last modified info');
-    }
+    if (!data.success) throw new Error(data.error || 'Failed to get last modified info');
     return data.data;
   });
 }
