@@ -26,16 +26,16 @@ function formatDisplayName(value) {
 
 function buildUserProfile() {
   const user = Session.getActiveUser();
-  const email = String(user.getEmail() || '').trim();
   const loginId = String(user.getUserLoginId() || '').trim();
-  const localPart = email ? email.split('@')[0] : '';
-  const baseName = loginId || localPart || 'Unknown User';
+  const tempUserKey = String(Session.getTemporaryActiveUserKey() || '').trim();
+  const userId = tempUserKey || loginId || 'unknown-user';
+  const baseName = 'Workspace User';
 
   return {
-    email: email,
+    userId: userId,
     name: baseName,
-    displayName: formatDisplayName(baseName) || email || 'Unknown User',
-    isAuthenticated: Boolean(email)
+    displayName: formatDisplayName(baseName) || 'Unknown User',
+    isAuthenticated: Boolean(userId)
   };
 }
 
@@ -68,7 +68,7 @@ function initializeSpreadsheet() {
       dataSheet = spreadsheet.insertSheet(CONFIG.DATA_SHEET_NAME);
     }
     ensureHeaderRow(dataSheet, [
-      'id', 'userEmail', 'uploadDate', 'fileName', 'dataType',
+      'id', 'userId', 'uploadDate', 'fileName', 'dataType',
       'rawData', 'processedData', 'metadata'
     ]);
 
@@ -77,14 +77,14 @@ function initializeSpreadsheet() {
     if (!usersSheet) {
       usersSheet = spreadsheet.insertSheet(CONFIG.USERS_SHEET_NAME);
     }
-    ensureHeaderRow(usersSheet, ['email', 'name', 'displayName', 'lastAccess', 'uploadCount']);
+    ensureHeaderRow(usersSheet, ['userId', 'name', 'displayName', 'lastAccess', 'uploadCount']);
 
     // Create last modified sheet if it doesn't exist
     let lastModifiedSheet = spreadsheet.getSheetByName(CONFIG.LAST_MODIFIED_SHEET_NAME);
     if (!lastModifiedSheet) {
       lastModifiedSheet = spreadsheet.insertSheet(CONFIG.LAST_MODIFIED_SHEET_NAME);
     }
-    ensureHeaderRow(lastModifiedSheet, ['timestamp', 'userEmail', 'userName', 'userDisplayName', 'action', 'fileName', 'dataType', 'details']);
+    ensureHeaderRow(lastModifiedSheet, ['timestamp', 'userId', 'userName', 'userDisplayName', 'action', 'fileName', 'dataType', 'details']);
 
     return { success: true, message: 'Spreadsheet initialized successfully' };
   } catch (error) {
@@ -110,10 +110,14 @@ function storeUploadedData(fileName, dataType, rawData, processedData, metadata)
     const id = Utilities.getUuid();
     const uploadDate = new Date().toISOString();
 
+    // 🚀 THE "ZERO-CLICK" OVERRIDE: Use the name from React if it exists
+    const actualName = (metadata && metadata.engineerName) ? metadata.engineerName : userInfo.data.name;
+    const actualDisplayName = (metadata && metadata.engineerName) ? metadata.engineerName : userInfo.data.displayName;
+
     // Prepare data for storage
     const rowData = [
       id,
-      userInfo.data.email,
+      userInfo.data.userId,
       uploadDate,
       fileName,
       dataType,
@@ -124,22 +128,25 @@ function storeUploadedData(fileName, dataType, rawData, processedData, metadata)
 
     sheet.appendRow(rowData);
 
-    // Update user stats
-    updateUserStats(userInfo.data.email, userInfo.data.name, userInfo.data.displayName);
+    // Update user stats with the Engineer's Name
+    updateUserStats(userInfo.data.userId, actualName, actualDisplayName);
 
-    // Update last modified info
+    // Update last modified info with the Engineer's Name
     const processedCount = Array.isArray(processedData) ? processedData.length : 0;
     const rawCount = Array.isArray(rawData) ? rawData.length : 0;
     const recordCount = processedCount || rawCount;
     updateLastModified(
-      userInfo.data.email,
-      userInfo.data.name,
-      userInfo.data.displayName,
+      userInfo.data.userId,
+      actualName,
+      actualDisplayName,
       fileName,
       dataType,
       'upload',
       `Processed ${recordCount} records`
     );
+
+    // 🚀 TRIGGER THE SELF-CLEANING ALGORITHM
+    cleanUpOldData(dataType, 15);
 
     return {
       success: true,
@@ -163,7 +170,7 @@ function getUserUploadedData(limit = 50, dataType = '') {
       return userInfo;
     }
 
-    const userRows = getUserDataRows(userInfo.data.email, dataType);
+    const userRows = getUserDataRows(dataType);
     if (userRows.length === 0) {
       return { success: true, data: [] };
     }
@@ -172,7 +179,7 @@ function getUserUploadedData(limit = 50, dataType = '') {
       .slice(0, limit)
       .map(row => ({
         id: row[0],
-        userEmail: row[1],
+        userId: row[1],
         uploadDate: row[2],
         fileName: row[3],
         dataType: row[4],
@@ -194,7 +201,7 @@ function getUserUploadedDataSummary(limit = 50, dataType = '') {
       return userInfo;
     }
 
-    const userRows = getUserDataRows(userInfo.data.email, dataType);
+    const userRows = getUserDataRows(dataType);
     return {
       success: true,
       data: userRows.slice(0, limit).map(buildStoredDataSummary)
@@ -211,7 +218,7 @@ function getUploadedDataById(dataId) {
       return userInfo;
     }
 
-    const userRows = getUserDataRows(userInfo.data.email);
+    const userRows = getUserDataRows();
     const row = userRows.find(item => item[0] === dataId);
     if (!row) {
       return { success: false, error: 'Stored data not found or access denied' };
@@ -221,7 +228,7 @@ function getUploadedDataById(dataId) {
       success: true,
       data: {
         id: row[0],
-        userEmail: row[1],
+        userId: row[1],
         uploadDate: row[2],
         fileName: row[3],
         dataType: row[4],
@@ -242,7 +249,7 @@ function getLatestUserUploadedData(dataType = '') {
       return userInfo;
     }
 
-    const userRows = getUserDataRows(userInfo.data.email, dataType);
+    const userRows = getUserDataRows(dataType);
     if (userRows.length === 0) {
       return { success: true, data: null };
     }
@@ -256,13 +263,13 @@ function getLatestUserUploadedData(dataType = '') {
 /**
  * Update user statistics
  */
-function updateUserStats(email, name, displayName) {
+function updateUserStats(userId, name, displayName) {
   try {
     const spreadsheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
     const sheet = spreadsheet.getSheetByName(CONFIG.USERS_SHEET_NAME);
     const data = sheet.getDataRange().getValues();
     const headers = data[0] || [];
-    const emailColumn = headers.indexOf('email');
+    const userIdColumn = headers.indexOf('userId');
     const nameColumn = headers.indexOf('name');
     const displayNameColumn = headers.indexOf('displayName');
     const lastAccessColumn = headers.indexOf('lastAccess');
@@ -270,7 +277,7 @@ function updateUserStats(email, name, displayName) {
 
     let userRowIndex = -1;
     for (let i = 1; i < data.length; i++) {
-      if (data[i][emailColumn] === email) {
+      if (data[i][userIdColumn] === userId) {
         userRowIndex = i + 1; // +1 because sheet rows are 1-indexed
         break;
       }
@@ -280,7 +287,7 @@ function updateUserStats(email, name, displayName) {
 
     if (userRowIndex === -1) {
       // New user
-      sheet.appendRow([email, name, displayName, now, 1]);
+      sheet.appendRow([userId, name, displayName, now, 1]);
     } else {
       // Existing user - update last access and increment count
       const currentCount = Number(data[userRowIndex - 1][uploadCountColumn] || 0);
@@ -297,7 +304,7 @@ function updateUserStats(email, name, displayName) {
 /**
  * Update last modified tracking
  */
-function updateLastModified(email, name, displayName, fileName, dataType, action = 'upload', details = '') {
+function updateLastModified(userId, name, displayName, fileName, dataType, action = 'upload', details = '') {
   try {
     const spreadsheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
     const sheet = spreadsheet.getSheetByName(CONFIG.LAST_MODIFIED_SHEET_NAME);
@@ -305,9 +312,9 @@ function updateLastModified(email, name, displayName, fileName, dataType, action
     const timestamp = new Date().toISOString();
     const rowData = [
       timestamp,
-      email,
+      userId,
       name,
-      displayName,
+      displayName, // This now receives the React engineerName!
       action,
       fileName,
       dataType,
@@ -323,7 +330,7 @@ function updateLastModified(email, name, displayName, fileName, dataType, action
 /**
  * Get last modified information
  */
-function getLastModifiedInfo() {
+function getLastModifiedInfo(dataType = '') {
   try {
     initializeSpreadsheet();
 
@@ -335,14 +342,26 @@ function getLastModifiedInfo() {
       return { success: true, data: null };
     }
 
-    // Get the most recent entry
     const headers = data[0] || [];
-    const lastEntry = data[data.length - 1];
+    const dataTypeColumn = headers.indexOf('dataType');
+
+    let lastEntry = null;
+    for (let i = data.length - 1; i >= 1; i--) {
+      if (!dataType || data[i][dataTypeColumn] === dataType) {
+        lastEntry = data[i];
+        break;
+      }
+    }
+
+    if (!lastEntry) {
+      return { success: true, data: null };
+    }
+
     return {
       success: true,
       data: {
         timestamp: lastEntry[headers.indexOf('timestamp')],
-        userEmail: lastEntry[headers.indexOf('userEmail')],
+        userId: lastEntry[headers.indexOf('userId')],
         userName: lastEntry[headers.indexOf('userName')],
         userDisplayName: lastEntry[headers.indexOf('userDisplayName')],
         action: lastEntry[headers.indexOf('action')],
@@ -371,13 +390,14 @@ function deleteUploadedData(dataId) {
     const data = sheet.getDataRange().getValues();
 
     for (let i = 1; i < data.length; i++) {
-      if (data[i][0] === dataId && data[i][1] === userInfo.data.email) {
+      // 🚀 GLOBAL DELETE: Teammates can clear old shared data in this shared workspace
+      if (data[i][0] === dataId) {
         sheet.deleteRow(i + 1);
         return { success: true, message: 'Data deleted successfully' };
       }
     }
 
-    return { success: false, error: 'Data not found or access denied' };
+    return { success: false, error: 'Data not found' };
   } catch (error) {
     return { success: false, error: 'Failed to delete data: ' + error.message };
   }
@@ -452,7 +472,7 @@ function doPost(e) {
 
       case 'getLastModified':
         return ContentService
-          .createTextOutput(JSON.stringify(getLastModifiedInfo()))
+          .createTextOutput(JSON.stringify(getLastModifiedInfo(data.dataType)))
           .setMimeType(ContentService.MimeType.JSON);
 
       default:
@@ -504,7 +524,7 @@ function safeJsonParse(value, fallback) {
   }
 }
 
-function getUserDataRows(email, dataType = '') {
+function getUserDataRows(dataType = '') {
   const spreadsheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
   const sheet = spreadsheet.getSheetByName(CONFIG.DATA_SHEET_NAME);
   const data = sheet.getDataRange().getValues();
@@ -514,7 +534,7 @@ function getUserDataRows(email, dataType = '') {
   }
 
   return data.slice(1)
-    .filter(row => row[1] === email)
+    // 🚀 THE GLOBAL WORKSPACE FIX: Team can see each other's data in this shared workspace.
     .filter(row => !dataType || row[4] === dataType)
     .sort((a, b) => new Date(b[2]) - new Date(a[2]));
 }
@@ -527,11 +547,57 @@ function buildStoredDataSummary(row) {
 
   return {
     id: row[0],
-    userEmail: row[1],
+    userId: row[1],
     uploadDate: row[2],
     fileName: row[3],
     dataType: row[4],
     metadata: metadata,
     processedCount: processedCount
   };
+}
+
+/**
+ * 🚀 THE FIFO AUTO-CLEANUP FUNCTION
+ * Keeps only the most recent 'maxKeep' records for a specific data type.
+ */
+function cleanUpOldData(dataType, maxKeep = 15) {
+  try {
+    const spreadsheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+    const sheet = spreadsheet.getSheetByName(CONFIG.DATA_SHEET_NAME);
+    const data = sheet.getDataRange().getValues();
+    
+    // We need at least header + maxKeep records to even consider deleting
+    if (data.length <= maxKeep + 1) return; 
+
+    let typeRows = [];
+    
+    // Loop through data (skipping header) to find rows matching the dataType
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][4] === dataType) { // Column index 4 is dataType
+        typeRows.push({ 
+          rowIndex: i + 1, 
+          timestamp: new Date(data[i][2]).getTime() 
+        });
+      }
+    }
+
+    // Sort newest to oldest
+    typeRows.sort((a, b) => b.timestamp - a.timestamp);
+
+    // If we have more rows than we want to keep, delete the oldest ones
+    if (typeRows.length > maxKeep) {
+      const rowsToDelete = typeRows.slice(maxKeep);
+      
+      // CRITICAL: Sort row indices descending (highest number first) to prevent shifting errors
+      rowsToDelete.sort((a, b) => b.rowIndex - a.rowIndex);
+      
+      rowsToDelete.forEach(row => {
+        sheet.deleteRow(row.rowIndex);
+      });
+      
+      Logger.log(`FIFO Cleanup: Deleted ${rowsToDelete.length} old records for ${dataType}`);
+    }
+  } catch (error) {
+    Logger.log('Cleanup failed: ' + error.message);
+  }
 }

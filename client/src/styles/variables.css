@@ -64,7 +64,7 @@ body.dark-mode {
   --bg-primary: #111c44;
   --bg-secondary: #0b1437;
   --overlay-bg: rgba(11, 20, 55, 0.8);
-  --brand-purple: #22036b;
+  --brand-purple: #8b5cf6;
   --brand-gradient: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%);
   
   /* === SEMANTIC COLOR TOKENS (dark overrides) === */

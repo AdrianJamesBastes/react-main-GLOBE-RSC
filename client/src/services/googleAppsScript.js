@@ -272,12 +272,12 @@ export function getUserInfo() {
 /**
  * Get last modified information
  */
-export function getLastModifiedInfo() {
+export function getLastModifiedInfo(dataType = '') {
   const runner = getGoogleScriptRunner();
   
   // If in GAS environment, use google.script.run
   if (runner) {
-    return promisifyGasCall('getLastModifiedInfo')
+    return promisifyGasCall('getLastModifiedInfo', dataType)
       .then(result => {
         if (!result.success) {
           throw new Error(result.error || 'Failed to get last modified info');
@@ -291,7 +291,8 @@ export function getLastModifiedInfo() {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      action: 'getLastModified'
+      action: 'getLastModified',
+      dataType
     })
   })
   .then(response => response.json())

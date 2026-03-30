@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect } from 'react';
+﻿import { useState, useMemo, useRef, useEffect } from 'react';
 import useDarkMode from '../../hooks/useDarkMode';
 import useSearchDebounce from '../../hooks/useSearchDebounce';
 import AnalyticsDashboard from '../../Dashboard/AnalyticsDashboard';
@@ -55,7 +55,8 @@ export default function SMDashboard() {
   const [isDarkMode, toggleTheme] = useDarkMode();
   const { searchTerm, setSearchTerm } = useSearchDebounce();
   const { isLoading, isAiLoading, scanFiles, runAiCommand } = useStormMasterlistProcessor();
-  const setIsAiLoading = () => {};
+  const [isAiLoadingFallback, setIsAiLoadingFallback] = useState(false);
+  const isAiLoadingVisible = isAiLoading || isAiLoadingFallback;
   const pageIsLoading = isLoading || isNavigating || isStoredDataLoading || isInitialDataLoading;
   const CACHE_KEY = 'storm_masterlist_cache_v1';
   const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -77,6 +78,73 @@ export default function SMDashboard() {
   const [showAiPanel, setShowAiPanel] = useState(false);
   const [showHistoryPanel, setShowHistoryPanel] = useState(false);
 
+  const [themeModal, setThemeModal] = useState({
+    visible: false,
+    title: '',
+    message: '',
+    type: 'info',
+    input: false,
+    inputValue: '',
+    confirmText: 'OK',
+    cancelText: null,
+    onConfirm: null,
+    onCancel: null
+  });
+
+  const showThemeModal = ({ title, message, type = 'info', input = false, inputValue = '', confirmText = 'OK', cancelText = null, onConfirm = null, onCancel = null }) => {
+    setThemeModal({ visible: true, title, message, type, input, inputValue, confirmText, cancelText, onConfirm, onCancel });
+  };
+
+  const closeThemeModal = () => setThemeModal(prev => ({ ...prev, visible: false, inputValue: '' }));
+
+  const handleThemeModalConfirm = () => {
+    if (themeModal.input) {
+      themeModal.onConfirm?.(themeModal.inputValue);
+    } else {
+      themeModal.onConfirm?.();
+    }
+    closeThemeModal();
+  };
+
+  const handleThemeModalCancel = () => {
+    themeModal.onCancel?.();
+    closeThemeModal();
+  };
+
+  const askForEngineerName = () => {
+    showThemeModal({
+      title: 'Audit Log Required',
+      message: 'Please enter your name to push this process to the database.',
+      type: 'warning',
+      input: true,
+      inputValue: '',
+      confirmText: 'Continue',
+      cancelText: 'Cancel',
+      onConfirm: (value) => {
+        const trimmed = (value || '').trim();
+        if (!trimmed) {
+          showThemeModal({
+            title: 'Name Required',
+            message: 'Scan cancelled: a name is required to maintain the audit log.',
+            type: 'warning',
+            confirmText: 'OK'
+          });
+          return;
+        }
+        localStorage.setItem('globe_rsc_engineer', trimmed);
+        handleScan();
+      },
+      onCancel: () => {
+        showThemeModal({
+          title: 'Scan Cancelled',
+          message: 'A name is required to maintain the audit log.',
+          type: 'info',
+          confirmText: 'OK'
+        });
+      }
+    });
+  };
+
   const applyStoredProcessedData = (item) => {
     if (!item) return;
     setResults(item.processedData || []);
@@ -85,25 +153,27 @@ export default function SMDashboard() {
     setShowHistoryPanel(false);
   };
 
-  const readCache = () => {
-    try {
-      const raw = sessionStorage.getItem(CACHE_KEY);
-      if (!raw) return null;
-      const cached = JSON.parse(raw);
-      if (!cached?.timestamp || (Date.now() - cached.timestamp) > CACHE_TTL_MS) return null;
-      return cached;
-    } catch {
-      return null;
-    }
-  };
+    const readCache = () => {
+        try {
+          const raw = localStorage.getItem(CACHE_KEY);
+          if (!raw) return null;
+          const cached = JSON.parse(raw);
+          if (!cached?.timestamp || (Date.now() - cached.timestamp) > CACHE_TTL_MS) return null;
+          return cached;
+        } catch {
+          return null;
+        }
+      };
 
-  const writeCache = (payload) => {
-    try {
-      sessionStorage.setItem(CACHE_KEY, JSON.stringify({ ...payload, timestamp: Date.now() }));
-    } catch {
-      // Ignore caching failures
-    }
-  };
+      const writeCache = (payload) => {
+        try {
+          localStorage.setItem(CACHE_KEY, JSON.stringify({ ...payload, timestamp: Date.now() }));
+        } catch (error) {
+          console.warn("⚠️ SM Cache Write Failed (Likely Exceeded 5MB limit):", error);
+          // Failsafe: Clear the bloated cache so it doesn't corrupt the app on next load
+          localStorage.removeItem(CACHE_KEY);
+        }
+      };
   
   const [chatHistory, setChatHistory] = useState([
     { sender: 'ai', text: "Hello Adrian! I'm your veRiSynC AI Copilot. Ask me to list sites or update remarks!" }
@@ -119,9 +189,10 @@ export default function SMDashboard() {
     }
   }, [showHistoryPanel, selectedRowDetails]);
 
-  // Load user info and stored data on mount
+ // Load user info and stored data on mount
   useEffect(() => {
     const loadUserData = async () => {
+      // STEP 1: INSTANT LOAD FROM CACHE (Stale data)
       const cached = readCache();
       if (cached) {
         setUserInfo(cached.userInfo || null);
@@ -130,23 +201,28 @@ export default function SMDashboard() {
         if (cached.latestStoredData) {
           applyStoredProcessedData(cached.latestStoredData);
         }
-        setIsInitialDataLoading(false);
+        setIsInitialDataLoading(false); // Drop the loading screen instantly!
       }
 
+      // STEP 2: SILENT BACKGROUND FETCH (Fresh data)
       try {
         setIsRefreshingSavedData(true);
         const [userData, storedDataList, latestStoredData, lastModified] = await Promise.all([
           getUserInfo(),
           getUserUploadedDataSummary(10, 'storm-masterlist'),
           getLatestUserUploadedData('storm-masterlist'),
-          getLastModifiedInfo()
+          getLastModifiedInfo('storm-masterlist')
         ]);
+        
+        // STEP 3: UPDATE SYSTEM STATE
         setUserInfo(userData);
         setStoredData(storedDataList);
+        setLastModifiedInfo(lastModified);
         if (latestStoredData) {
           applyStoredProcessedData(latestStoredData);
         }
-        setLastModifiedInfo(lastModified);
+        
+        // STEP 4: UPDATE CACHE WITH FRESH DATA
         writeCache({
           userInfo: userData,
           storedData: storedDataList,
@@ -220,18 +296,19 @@ export default function SMDashboard() {
       }));
 
       const dataString = JSON.stringify(lightweightData);
+      setIsAiLoadingFallback(true);
 
       window.google.script.run
         .withSuccessHandler((aiResponse) => {
-          setIsAiLoading(false);
+          setIsAiLoadingFallback(false);
           
           if (!aiResponse) {
-            setChatHistory(prev => [...prev, { sender: 'system', text: "⚠️ AI returned an empty response.", isError: true }]);
+            setChatHistory(prev => [...prev, { sender: 'system', text: "âš ï¸ AI returned an empty response.", isError: true }]);
             return;
           }
 
           if (aiResponse.error) {
-            setChatHistory(prev => [...prev, { sender: 'system', text: `⚠️ System Error: ${aiResponse.error}`, isError: true }]);
+            setChatHistory(prev => [...prev, { sender: 'system', text: `âš ï¸ System Error: ${aiResponse.error}`, isError: true }]);
             return;
           }
           
@@ -240,7 +317,7 @@ export default function SMDashboard() {
           if (replyText) {
             setChatHistory(prev => [...prev, { sender: 'ai', text: replyText }]);
           } else if (!aiResponse.mutations || aiResponse.mutations.length === 0) {
-            setChatHistory(prev => [...prev, { sender: 'ai', text: `🤖 [Raw Output]: ${JSON.stringify(aiResponse)}` }]);
+            setChatHistory(prev => [...prev, { sender: 'ai', text: `ðŸ¤– [Raw Output]: ${JSON.stringify(aiResponse)}` }]);
           }
 
           if (aiResponse.mutations && Array.isArray(aiResponse.mutations) && aiResponse.mutations.length > 0) {
@@ -264,22 +341,22 @@ export default function SMDashboard() {
               
               if (actualChangesCount > 0) {
                 setResults(updatedResults);
-                setChatHistory(prev => [...prev, { sender: 'system', text: `✓ Successfully applied updates to ${actualChangesCount} rows.` }]);
+                setChatHistory(prev => [...prev, { sender: 'system', text: `âœ“ Successfully applied updates to ${actualChangesCount} rows.` }]);
               }
             } catch {
-              setChatHistory(prev => [...prev, { sender: 'system', text: `⚠️ Table protected from corrupted AI data.`, isError: true }]);
+              setChatHistory(prev => [...prev, { sender: 'system', text: `âš ï¸ Table protected from corrupted AI data.`, isError: true }]);
             }
           }
         })
         .withFailureHandler((err) => {
-          setIsAiLoading(false);
-          setChatHistory(prev => [...prev, { sender: 'system', text: `⚠️ Network Timeout: ${err.message || err}`, isError: true }]);
+          setIsAiLoadingFallback(false);
+          setChatHistory(prev => [...prev, { sender: 'system', text: `âš ï¸ Network Timeout: ${err.message || err}`, isError: true }]);
         })
         .processAIAgentCommand(userMessage, dataString);
     } else {
       setTimeout(() => {
-        setIsAiLoading(false);
-        setChatHistory(prev => [...prev, { sender: 'ai', text: "I'm running locally. Google Apps Script is offline. 🔌" }]);
+        setIsAiLoadingFallback(false);
+        setChatHistory(prev => [...prev, { sender: 'ai', text: "I'm running locally. Google Apps Script is offline. ðŸ”Œ" }]);
       }, 1000);
     }
     }
@@ -287,17 +364,43 @@ export default function SMDashboard() {
 
   const handleSpecificExport = (exportCategory) => {
     setShowExportMenu(false);
-    if (results.length === 0) return alert("No data to export.");
+    if (results.length === 0) {
+      return showThemeModal({
+        title: 'No Data',
+        message: 'No data available to export.',
+        type: 'warning',
+        confirmText: 'OK'
+      });
+    }
 
     try {
       exportStormMasterlist(results, exportCategory);
     } catch (error) {
-      alert(error.message || String(error));
+      showThemeModal({
+        title: 'Export Error',
+        message: error.message || String(error),
+        type: 'error',
+        confirmText: 'OK'
+      });
     }
   };
 
-  const handleScan = async () => {
-    if (!monitorFile1 || !monitorFile2) return alert("Please upload both CSV files.");
+ const handleScan = async () => {
+    if (!monitorFile1 || !monitorFile2) {
+      return showThemeModal({
+        title: 'Missing CSV Files',
+        message: 'Please upload both CSV files before scanning.',
+        type: 'warning',
+        confirmText: 'OK'
+      });
+    }
+
+    let engineerName = localStorage.getItem('globe_rsc_engineer');
+  
+    if (!engineerName) {
+      return askForEngineerName();
+    }
+
     setResults([]);
     setFilterStatus('ALL');
     setSelectedRowDetails(null);
@@ -308,6 +411,7 @@ export default function SMDashboard() {
       setResults(data);
 
       const fileNames = `${monitorFile1.name} + ${monitorFile2.name}`;
+      
       storeUploadedData(
         fileNames,
         'storm-masterlist',
@@ -317,13 +421,15 @@ export default function SMDashboard() {
           totalRecords: data.length,
           processedRecords: data.length,
           dashboardMode: 'storm-masterlist',
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
+          // ðŸš€ PASS THE NAME TO THE DATABASE
+          engineerName: engineerName 
         }
       )
         .then(async () => {
           const [updatedStoredData, lastModified] = await Promise.all([
             getUserUploadedDataSummary(10, 'storm-masterlist'),
-            getLastModifiedInfo()
+            getLastModifiedInfo('storm-masterlist')
           ]);
           setStoredData(updatedStoredData);
           setLastModifiedInfo(lastModified);
@@ -339,11 +445,21 @@ export default function SMDashboard() {
         })
         .catch((storeError) => {
           console.error('Failed to store data:', storeError);
-          alert('Data processed successfully but failed to save to database. You can still view the results.');
+          showThemeModal({
+            title: 'Save Warning',
+            message: 'Data was processed successfully but failed to save to the database. You can still view the results.',
+            type: 'warning',
+            confirmText: 'OK'
+          });
         });
 
     } catch (error) {
-      alert("Error: " + (error.message || error));
+      showThemeModal({
+        title: 'Scan Error',
+        message: "Error: " + (error.message || error),
+        type: 'error',
+        confirmText: 'OK'
+      });
     }
   };
 
@@ -351,7 +467,7 @@ export default function SMDashboard() {
     try {
       const [updatedStoredData, lastModified] = await Promise.all([
         getUserUploadedDataSummary(10, 'storm-masterlist'),
-        getLastModifiedInfo()
+        getLastModifiedInfo('storm-masterlist')
       ]);
       setStoredData(updatedStoredData);
       setLastModifiedInfo(lastModified);
@@ -378,10 +494,20 @@ export default function SMDashboard() {
       });
       // Update the file inputs to show the loaded file names
       // Note: We can't actually load the original files, but we can show the names
-      alert(`Loaded data from: ${fullItem.fileName}\n${fullItem.processedData?.length || 0} results loaded.`);
+      showThemeModal({
+        title: 'Data Loaded',
+        message: `Loaded data from: ${fullItem.fileName}\n${fullItem.processedData?.length || 0} results loaded.`,
+        type: 'info',
+        confirmText: 'OK'
+      });
     } catch (error) {
       console.error('Failed to load stored data:', error);
-      alert('Failed to load stored data.');
+      showThemeModal({
+        title: 'Load Failed',
+        message: 'Failed to load stored data.',
+        type: 'error',
+        confirmText: 'OK'
+      });
     } finally {
       setIsStoredDataLoading(false);
     }
@@ -523,87 +649,57 @@ export default function SMDashboard() {
     );
   };
 
-const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.email || "Unknown User";
-  const currentUserEmail = userInfo?.email || "No email";
-  
-  const lastModifiedName = lastModifiedInfo?.userDisplayName || lastModifiedInfo?.userName || lastModifiedInfo?.userEmail; 
-  
-  // 👇 ADD THIS LINE BACK IN 👇
-  const lastModifiedEmail = lastModifiedInfo?.userEmail || "No email"; 
-  
+const currentUserName = userInfo?.displayName || userInfo?.name || "Unknown User";
+  const engineerName = localStorage.getItem('globe_rsc_engineer') || currentUserName || "Workspace User";
+  const userInitial = engineerName.charAt(0).toUpperCase();
+  const lastModifiedName = lastModifiedInfo?.userDisplayName || lastModifiedInfo?.userName || "";
   const lastModifiedTimestamp = lastModifiedInfo?.timestamp
     ? new Date(lastModifiedInfo.timestamp).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
     : "No previous sync";
 
-  const userInitials = currentUserName !== "Unknown User" ? currentUserName.charAt(0).toUpperCase() : "?";
-
   const headerActions = (
-    <div className="header-actions" style={{ display: 'flex', gap: '20px', alignItems: 'center', justifyContent: 'flex-end', paddingRight: '10px' }}>
-      
-      {isRefreshingSavedData && !isInitialDataLoading && (
-        <span style={{ fontSize: '0.75rem', color: 'var(--color-info)', fontWeight: 'bold', animation: 'pulse 1.5s infinite' }}>
-          Refreshing...
+    <div className="header-actions" style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', paddingLeft: '16px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', minWidth: 0, maxWidth: '280px' }}>
+        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', lineHeight: 1.2 }}>
+          Last Modified:
         </span>
-      )}
+        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {lastModifiedName ? `${lastModifiedTimestamp} | ${lastModifiedName}` : lastModifiedTimestamp}
+        </span>
+      </div>
 
-      {/* 1. Sleek Text-Only Last Modified (SMART RENDERING) */}
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: '1.3' }}>
-        <span style={{ fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)', fontWeight: 'bold' }}>
-          {lastModifiedName ? "Last Modified By" : "Database Status"}
-        </span>
-        
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          {lastModifiedName ? (
-            <>
-              {/* Only show the name and the dot if a name exists */}
-              <span style={{ fontSize: '0.85rem', fontWeight: '700', color: 'var(--text-primary)' }}>
-                {lastModifiedName}
-              </span>
-              <span style={{ color: 'var(--text-secondary)', fontSize: '0.7rem' }}>•</span>
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                {lastModifiedTimestamp}
-              </span>
-            </>
-          ) : (
-            /* If no name exists, just show the fallback text nicely */
-            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
-              {lastModifiedTimestamp}
-            </span>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 0, flex: 1 }} />
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div className="export-dropdown-container" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setShowExportMenu(false); }} tabIndex={-1} style={{ position: 'relative' }}>
+          <button className="btn theme-toggle" onClick={() => setShowExportMenu(!showExportMenu)} disabled={results.length === 0} style={{
+            width: '36px', height: '36px', borderRadius: '50%', padding: 0,
+            background: 'var(--bg-input)', border: '1px solid var(--border-light)',
+            color: 'var(--text-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            cursor: results.length === 0 ? 'not-allowed' : 'pointer',
+            opacity: results.length === 0 ? 0.5 : 1, transition: 'all 0.2s ease', outline: 'none'
+          }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 5v9" />
+              <polyline points="8 11 12 15 16 11" />
+              <path d="M6 18h12" />
+            </svg>
+          </button>
+          {showExportMenu && (
+            <div className="export-menu" style={{ position: 'absolute', top: '110%', left: 0, zIndex: 50 }}>
+              <button onClick={() => handleSpecificExport('ALL')}>Storm Masterlist</button>
+              <button onClick={() => handleSpecificExport('NEW')}>New Sites Only</button>
+              <button onClick={() => handleSpecificExport('REMOVED')}>Removed Only</button>
+              <button onClick={() => handleSpecificExport('MISMATCH')}>Mismatches Only</button>
+              <button onClick={() => handleSpecificExport('UNCHANGED')}>Unchanged Only</button>
+            </div>
           )}
         </div>
-      </div>
-
-      {/* Subtle Vertical Divider */}
-      <div style={{ width: '1px', height: '28px', backgroundColor: 'var(--border-light)', opacity: 0.8 }}></div>
-
-      {/* 2. Modern User Profile with Avatar */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: '1.3' }}>
-          <span style={{ fontWeight: '800', fontSize: '0.85rem', color: 'var(--text-primary)' }}>{currentUserName}</span>
-          <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{currentUserEmail}</span>
-        </div>
-        <div style={{
-          width: '36px', height: '36px', borderRadius: '50%',
-          background: 'linear-gradient(135deg, var(--brand-purple), #6b21a8)',
-          color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontWeight: 'bold', fontSize: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
-        }}>
-          {userInitials}
-        </div>
-      </div>
-
-      {/* Subtle Vertical Divider */}
-      <div style={{ width: '1px', height: '28px', backgroundColor: 'var(--border-light)', opacity: 0.8 }}></div>
-
-      {/* 3. Action Buttons (Theme & Export) */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-        
-        {/* Circular Theme Toggle */}
-        <button className="btn theme-toggle" onClick={toggleTheme} title="Toggle Theme" style={{ 
+        <button className="btn theme-toggle" onClick={toggleTheme} title="Toggle Theme" style={{
           width: '36px', height: '36px', borderRadius: '50%', padding: 0,
-          background: 'var(--bg-input)', border: '1px solid var(--border-light)', 
+          background: 'var(--bg-input)', border: '1px solid var(--border-light)',
           color: 'var(--text-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          cursor: 'pointer', transition: 'all 0.2s ease', outline: 'none' 
+          cursor: 'pointer', transition: 'all 0.2s ease', outline: 'none'
         }}>
           {isDarkMode ? (
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -618,32 +714,20 @@ const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.ema
             </svg>
           )}
         </button>
-
-        {/* Pill-shaped Export Button */}
-        <div className="export-dropdown-container" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setShowExportMenu(false); }} tabIndex={-1} style={{position: 'relative'}}>
-          <button onClick={() => setShowExportMenu(!showExportMenu)} style={{ 
-            height: '36px', borderRadius: '18px', padding: '0 16px',
-            background: 'var(--text-primary)', color: 'var(--bg-primary)',
-            border: 'none', fontWeight: 'bold', fontSize: '0.8rem',
-            cursor: results.length === 0 ? 'not-allowed' : 'pointer',
-            opacity: results.length === 0 ? 0.5 : 1, transition: 'all 0.2s ease', outline: 'none',
-            boxShadow: '0 2px 6px rgba(0,0,0,0.1)'
+        <div style={{ width: '1px', height: '24px', background: 'rgba(128, 128, 128, 0.4)' }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div title={engineerName} style={{
+            width: '36px', height: '36px', borderRadius: '50%',
+            background: 'linear-gradient(135deg, var(--brand-purple), #6b21a8)',
+            color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontWeight: 'bold', fontSize: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
           }}>
-            Export Data ▾
-          </button>
-          
-          {showExportMenu && (
-            <div className="export-menu" style={{ position: 'absolute', top: '110%', right: 0, zIndex: 50 }}>
-              {/* Keep your existing export logic here for SMDashboard */}
-              <button onClick={() => handleSpecificExport('ALL')}>Storm Masterlist</button>
-              <button onClick={() => handleSpecificExport('NEW')}>New Sites Only</button>
-              <button onClick={() => handleSpecificExport('REMOVED')}>Removed Only</button>
-              <button onClick={() => handleSpecificExport('MISMATCH')}>Mismatches Only</button>
-              <button onClick={() => handleSpecificExport('UNCHANGED')}>Unchanged Only</button>
-            </div>
-          )}
+            {userInitial}
+          </div>
+          <div style={{ textAlign: 'right', lineHeight: '1.2', minWidth: 0 }}>
+            <div style={{ fontWeight: '700', fontSize: '0.82rem', color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '130px' }}>{engineerName}</div>
+          </div>
         </div>
-
       </div>
     </div>
   );
@@ -704,8 +788,8 @@ const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.ema
                     <div>
                       <span className="input-label">Status</span>
                       <div style={{ marginTop: '6px' }}>
-                        <span className={`status-badge ${selectedRowDetails.matchStatus.toLowerCase()}`}>
-                          {selectedRowDetails.matchStatus}
+                        <span className={`status-badge ${(selectedRowDetails?.matchStatus || 'UNCHANGED').toLowerCase()}`}>
+                          {selectedRowDetails?.matchStatus || 'UNCHANGED'}
                         </span>
                       </div>
                     </div>
@@ -736,17 +820,15 @@ const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.ema
                     <div style={{ background: 'var(--bg-primary)', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', marginBottom: '15px' }}>
                       <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Logged in as:</div>
                       <div style={{ fontWeight: 'bold', color: 'var(--brand-purple)' }}>{currentUserName}</div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{currentUserEmail}</div>
                     </div>
                   )}
 
-                  {lastModifiedInfo && (
+                  {lastModifiedInfo && lastModifiedInfo.timestamp && (
                     <div style={{ background: 'var(--bg-input)', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', marginBottom: '15px' }}>
                       <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '5px' }}>Last Data Modification:</div>
                       <div style={{ fontWeight: 'bold', color: 'var(--color-danger)' }}>{lastModifiedName}</div>
-                      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{lastModifiedEmail}</div>
-                      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
-                        {lastModifiedInfo.action} • {lastModifiedInfo.fileName}
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                        {lastModifiedInfo.action} â€¢ {lastModifiedInfo.fileName}
                       </div>
                       <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
                         {new Date(lastModifiedInfo.timestamp).toLocaleString()}
@@ -769,7 +851,7 @@ const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.ema
                             </div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                               <div style={{ fontSize: '0.8rem', color: 'var(--color-info)' }}>
-                                {item.dataType} • {item.processedCount ?? item.metadata?.processedRecords ?? 0} results
+                                {item.dataType} â€¢ {item.processedCount ?? item.metadata?.processedRecords ?? 0} results
                               </div>
                               <div style={{ fontSize: '0.7rem', color: 'var(--brand-purple)', background: 'var(--bg-input)', padding: '2px 6px', borderRadius: '10px' }}>
                                 Load
@@ -780,7 +862,7 @@ const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.ema
                       </div>
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '200px', color: 'var(--text-secondary)' }}>
-                        <div style={{ fontSize: '2rem', marginBottom: '10px' }}>📊</div>
+                        <div style={{ fontSize: '2rem', marginBottom: '10px' }}>📁</div>
                         <div>No stored data found</div>
                         <div style={{ fontSize: '0.8rem', marginTop: '5px' }}>Process some data to see it here</div>
                       </div>
@@ -795,7 +877,7 @@ const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.ema
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
                   </button>
                   <h3 style={{ margin: 0, fontSize: '1.2rem', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}>
-                    <span style={{ fontSize: '1.4rem' }}>✨</span> veRiSynC AI
+                    <span style={{ fontSize: '1.4rem' }}>âœ¨</span> veRiSynC AI
                   </h3>
                 </div>
                 
@@ -822,9 +904,9 @@ const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.ema
                     </div>
                   ))}
                   
-                  {isAiLoading && (
+                  {isAiLoadingVisible && (
                     <div style={{ alignSelf: 'flex-start', background: 'var(--bg-input)', padding: '10px 14px', borderRadius: '16px 16px 16px 0', border: '1px solid var(--border-light)' }}>
-                      <span style={{ display: 'inline-block', animation: 'logo-pulse 1s infinite', fontSize: '0.85rem' }}>🤖 Thinking...</span>
+                      <span style={{ display: 'inline-block', animation: 'logo-pulse 1s infinite', fontSize: '0.85rem' }}>ðŸ¤– Thinking...</span>
                     </div>
                   )}
                 </div>
@@ -858,7 +940,7 @@ const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.ema
                   />
                   <button 
                     onClick={handleAiExecute}
-                    disabled={isAiLoading || !aiCommand.trim()}
+                    disabled={isAiLoadingVisible || !aiCommand.trim()}
                     className="btn primary-filled"
                     style={{ width: '40px', height: '40px', padding: 0, borderRadius: '50%', display: 'flex', justifyContent: 'center', alignItems: 'center', flexShrink: 0 }}
                   >
@@ -906,7 +988,7 @@ const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.ema
               }
             }}
           >
-            <span style={{ fontSize: '1rem', transform: 'rotate(90deg)' }}>{showHistoryPanel ? "✕" : "📊"}</span>
+            <span style={{ fontSize: '1rem', transform: 'rotate(90deg)' }}>📁</span>
             <span className="history-tab-text">{showHistoryPanel ? "CLOSE" : "HISTORY"}</span>
           </div>
 
@@ -921,7 +1003,7 @@ const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.ema
               }
             }}
           >
-            <span style={{ fontSize: '1rem', transform: 'rotate(90deg)' }}>{showAiPanel ? "✕" : "</>"}</span>
+            <span style={{ fontSize: '1rem', transform: 'rotate(90deg)' }}>{showAiPanel ? "✓" : "</>"}</span>
             <span className="ai-tab-text">{showAiPanel ? "CLOSE" : "veRiSynC AI"}</span>
           </div>
 
@@ -929,7 +1011,7 @@ const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.ema
             <div className="dashboard-container">
               <AnalyticsDashboard data={results} activeFilter={filterStatus} onFilterChange={setFilterStatus} isDarkMode={isDarkMode} />
               
-              {/* 🚀 THE DYNAMIC COMPACT MODE CLASS */}
+              {/* ðŸš€ THE DYNAMIC COMPACT MODE CLASS */}
               <div className={`cards-section ${results.length > 0 ? 'compact-mode' : ''}`}>
                 
                 <div className={`stat-card luxury-glass total ${filterStatus === 'ALL' ? 'active' : ''}`} onClick={() => setFilterStatus('ALL')} style={{cursor: 'pointer'}}>
@@ -976,14 +1058,14 @@ const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.ema
                           disabled={results.length === 0}
                           style={{ opacity: results.length === 0 ? 0.5 : 1, cursor: results.length === 0 ? 'not-allowed' : 'pointer', outline: 'none' }}
                         >
-                          {/* 🚀 First Span: "Preview Data:" */}
+                          {/* ðŸš€ First Span: "Preview Data:" */}
                           <span style={{ color: isDarkMode ? '#ffffff' : 'var(--text-primary)' }}>
                             Preview Data: 
                           </span> 
                           
                           {' '} {/* Adds a tiny space between the words */}
 
-                          {/* 🚀 Second Span: The Dynamic Label */}
+                          {/* ðŸš€ Second Span: The Dynamic Label */}
                           <span style={{ 
                             fontWeight: 'bold', 
                             color: isDarkMode ? '#ffffff' : 'var(--brand-purple)' 
@@ -1052,7 +1134,7 @@ const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.ema
                   
                 </div>
               ) : (
-                // 🚀 ENTERPRISE SKELETON LOADER FOR STORM MASTER LIST
+                // ðŸš€ ENTERPRISE SKELETON LOADER FOR STORM MASTER LIST
                 <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
                   {[...Array(8)].map((_, i) => (
                     <div key={i} style={{ display: 'flex', alignItems: 'center', padding: '0 20px', height: '60px', borderBottom: "1px solid rgba(128,128,128,0.05)", boxSizing: 'border-box', opacity: 0.6 }}>
@@ -1072,6 +1154,39 @@ const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.ema
         </section>
       </main>
 
+      {themeModal.visible && (
+        <div className="theme-modal-overlay" onClick={handleThemeModalCancel}>
+          <div className="theme-modal-card" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+            <div className="theme-modal-header">
+              <h3>{themeModal.title}</h3>
+              <button className="theme-modal-close" onClick={handleThemeModalCancel} aria-label="Close">×</button>
+            </div>
+            <div className="theme-modal-body">
+              <p>{themeModal.message}</p>
+              {themeModal.input && (
+                <input
+                  type="text"
+                  value={themeModal.inputValue}
+                  onChange={(e) => setThemeModal(prev => ({ ...prev, inputValue: e.target.value }))}
+                  className="theme-modal-input"
+                  placeholder="Enter your name"
+                />
+              )}
+            </div>
+            <div className="theme-modal-actions">
+              {themeModal.cancelText && (
+                <button className="theme-modal-button secondary" onClick={handleThemeModalCancel}>
+                  {themeModal.cancelText}
+                </button>
+              )}
+              <button className="theme-modal-button primary" onClick={handleThemeModalConfirm}>
+                {themeModal.confirmText}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showBigMap && (
         <div className="map-modal-overlay">
           <div className="map-modal-content">
@@ -1088,3 +1203,5 @@ const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.ema
     </DashboardLayout>
   );
 }
+
+

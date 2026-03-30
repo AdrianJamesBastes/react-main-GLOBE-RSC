@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
+﻿import { useState, useMemo, useEffect, useRef } from 'react';
 import useDarkMode from '../../hooks/useDarkMode';
 import useSearchDebounce from '../../hooks/useSearchDebounce';
 import { processWirelessAlarms, processTransportAlarms } from '../../services/dataGrouper';
@@ -35,6 +35,7 @@ export default function SADashboard() {
   const [isRefreshingSavedData, setIsRefreshingSavedData] = useState(false);
   const [results, setResults] = useState([]);
   const [dashboardMode, setDashboardMode] = useState('wireless');
+  const isWirelessMode = dashboardMode === 'wireless';
 
   const navigate = useNavigate();
   const [isDarkMode, toggleTheme] = useDarkMode();
@@ -57,6 +58,74 @@ export default function SADashboard() {
   const [isGraphModalVisible, setIsGraphModalVisible] = useState(false);   
   const [graphModalOrigin, setGraphModalOrigin] = useState('0% 0%');                 
   const [selectedGraphAlarm, setSelectedGraphAlarm] = useState(null);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+
+  const [themeModal, setThemeModal] = useState({
+    visible: false,
+    title: '',
+    message: '',
+    type: 'info',
+    input: false,
+    inputValue: '',
+    confirmText: 'OK',
+    cancelText: null,
+    onConfirm: null,
+    onCancel: null
+  });
+
+  const showThemeModal = ({ title, message, type = 'info', input = false, inputValue = '', confirmText = 'OK', cancelText = null, onConfirm = null, onCancel = null }) => {
+    setThemeModal({ visible: true, title, message, type, input, inputValue, confirmText, cancelText, onConfirm, onCancel });
+  };
+
+  const closeThemeModal = () => setThemeModal(prev => ({ ...prev, visible: false, inputValue: '' }));
+
+  const handleThemeModalConfirm = () => {
+    if (themeModal.input) {
+      themeModal.onConfirm?.(themeModal.inputValue);
+    } else {
+      themeModal.onConfirm?.();
+    }
+    closeThemeModal();
+  };
+
+  const handleThemeModalCancel = () => {
+    themeModal.onCancel?.();
+    closeThemeModal();
+  };
+
+  const askForEngineerName = () => {
+    showThemeModal({
+      title: 'Audit Log Required',
+      message: 'Please enter your name to push this process to the database.',
+      type: 'warning',
+      input: true,
+      inputValue: '',
+      confirmText: 'Continue',
+      cancelText: 'Cancel',
+      onConfirm: (value) => {
+        const trimmed = (value || '').trim();
+        if (!trimmed) {
+          showThemeModal({
+            title: 'Name Required',
+            message: 'Scan cancelled: a name is required to maintain the audit log.',
+            type: 'warning',
+            confirmText: 'OK'
+          });
+          return;
+        }
+        localStorage.setItem('globe_rsc_engineer', trimmed);
+        handleScan();
+      },
+      onCancel: () => {
+        showThemeModal({
+          title: 'Scan Cancelled',
+          message: 'A name is required to maintain the audit log.',
+          type: 'info',
+          confirmText: 'OK'
+        });
+      }
+    });
+  };
 
   // Backend integration state
   const [storedData, setStoredData] = useState([]);
@@ -71,6 +140,7 @@ export default function SADashboard() {
   const currentLogo = isDarkMode ? globeLogoDark : globeLogoLight;
   const CACHE_TTL_MS = 5 * 60 * 1000;
   const cacheKey = `site_alert_cache_${dashboardMode}_v1`;
+  
   const applyStoredProcessedData = (item) => {
     if (!item) return;
     const processedData = Array.isArray(item.processedData) ? item.processedData : [];
@@ -80,9 +150,9 @@ export default function SADashboard() {
     setIsSidebarCollapsed(false);
   };
 
-  const readCache = () => {
+const readCache = () => {
     try {
-      const raw = sessionStorage.getItem(cacheKey);
+      const raw = localStorage.getItem(cacheKey);
       if (!raw) return null;
       const cached = JSON.parse(raw);
       if (!cached?.timestamp || (Date.now() - cached.timestamp) > CACHE_TTL_MS) return null;
@@ -94,9 +164,21 @@ export default function SADashboard() {
 
   const writeCache = (payload) => {
     try {
-      sessionStorage.setItem(cacheKey, JSON.stringify({ ...payload, timestamp: Date.now() }));
-    } catch {
-      // Ignore caching failures
+      const cachePayload = { ...payload };
+      
+      if (cachePayload.latestStoredData && cachePayload.latestStoredData.processedData) {
+         const slimProcessedData = cachePayload.latestStoredData.processedData.map(item => {
+            const { rawRows, ...rest } = item; 
+            return rest; // Cache everything EXCEPT the heavy rawRows
+         });
+         cachePayload.latestStoredData = { ...cachePayload.latestStoredData, processedData: slimProcessedData };
+      }
+
+      localStorage.setItem(cacheKey, JSON.stringify({ ...cachePayload, timestamp: Date.now() }));
+    } catch (error) {
+      console.warn("⚠️ Cache Write Failed (Likely Exceeded 5MB limit):", error);
+      // Failsafe: Clear the bloated cache so it doesn't corrupt the app
+      localStorage.removeItem(cacheKey); 
     }
   };
 
@@ -110,39 +192,41 @@ export default function SADashboard() {
   // Load user info and stored data on mount
   useEffect(() => {
     const loadUserData = async () => {
+      // STEP 1: INSTANT LOAD FROM CACHE (Stale data)
       const cached = readCache();
       if (cached) {
-        setUserInfo(cached.userInfo || null);
         setStoredData(cached.storedData || []);
         setLastModifiedInfo(cached.lastModifiedInfo || null);
         if (cached.latestStoredData) {
           applyStoredProcessedData(cached.latestStoredData);
         }
-        setIsInitialDataLoading(false);
+        setIsInitialDataLoading(false); // Drop the loading screen instantly!
       }
 
+      // STEP 2: SILENT BACKGROUND FETCH (Fresh data)
       try {
         setIsRefreshingSavedData(true);
-        const [userData, storedDataList, latestStoredData, lastModified] = await Promise.all([
-          getUserInfo(),
+        const [storedDataList, latestStoredData, lastModified] = await Promise.all([
           getUserUploadedDataSummary(10, dashboardMode),
           getLatestUserUploadedData(dashboardMode),
-          getLastModifiedInfo()
+          getLastModifiedInfo(dashboardMode)
         ]);
-        setUserInfo(userData);
+        
+        // STEP 3: UPDATE SYSTEM STATE
         setStoredData(storedDataList);
+        setLastModifiedInfo(lastModified);
         if (latestStoredData) {
           applyStoredProcessedData(latestStoredData);
         }
-        setLastModifiedInfo(lastModified);
+        
+        // STEP 4: UPDATE CACHE WITH FRESH DATA
         writeCache({
-          userInfo: userData,
           storedData: storedDataList,
           lastModifiedInfo: lastModified,
           latestStoredData: latestStoredData || null
         });
       } catch (error) {
-        console.error('Failed to load user data:', error);
+        console.error('Failed to sync with database:', error);
       } finally {
         setIsRefreshingSavedData(false);
         setIsInitialDataLoading(false);
@@ -265,9 +349,29 @@ export default function SADashboard() {
 
   const handleScan = async () => {
     if (dashboardMode === 'wireless') {
-      if (!monitorFile1 || !monitorFile2) return alert("Please upload both the NMS and SA Masterlist files.");
+      if (!monitorFile1 || !monitorFile2) {
+        return showThemeModal({
+          title: 'Missing Files',
+          message: 'Please upload both the NMS and SA Masterlist files.',
+          type: 'warning',
+          confirmText: 'OK'
+        });
+      }
     } else {
-      if (!monitorFile1) return alert("Please upload the NMS file.");
+      if (!monitorFile1) {
+        return showThemeModal({
+          title: 'Missing File',
+          message: 'Please upload the NMS file.',
+          type: 'warning',
+          confirmText: 'OK'
+        });
+      }
+    }
+
+    let engineerName = localStorage.getItem('globe_rsc_engineer');
+    
+    if (!engineerName) {
+      return askForEngineerName();
     }
 
     setIsLoading(true);
@@ -306,7 +410,7 @@ export default function SADashboard() {
           ? `${monitorFile1.name} + ${monitorFile2.name}`
           : monitorFile1.name;
 
-        storeUploadedData(
+       storeUploadedData(
           fileNames,
           dashboardMode,
           [],
@@ -315,13 +419,15 @@ export default function SADashboard() {
             totalRecords: nmsData.length,
             processedRecords: processedData.length,
             dashboardMode,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            // ðŸš€ PASS THE NAME TO THE DATABASE
+            engineerName: engineerName
           }
         )
           .then(async () => {
             const [updatedStoredData, lastModified] = await Promise.all([
               getUserUploadedDataSummary(10, dashboardMode),
-              getLastModifiedInfo()
+              getLastModifiedInfo(dashboardMode)
             ]);
             setStoredData(updatedStoredData);
             setLastModifiedInfo(lastModified);
@@ -337,21 +443,41 @@ export default function SADashboard() {
           })
           .catch((storeError) => {
             console.error('Failed to store data:', storeError);
-            alert('Data processed successfully but failed to save to database. You can still view the results.');
+            showThemeModal({
+              title: 'Save Warning',
+              message: 'Data was processed successfully but failed to save to database. You can still view the results.',
+              type: 'warning',
+              confirmText: 'OK'
+            });
           });
       } else {
-        alert(result.success ? "No matching alarms found." : "Error: " + result.error);
+        showThemeModal({
+          title: result.success ? 'No Matches' : 'Processing Error',
+          message: result.success ? 'No matching alarms were found.' : `Error: ${result.error}`,
+          type: result.success ? 'info' : 'error',
+          confirmText: 'OK'
+        });
       }
 
     } catch (error) {
-      alert("Error reading files: " + error.message);
+      showThemeModal({
+        title: 'Read Error',
+        message: `Error reading files: ${error.message}`,
+        type: 'error',
+        confirmText: 'OK'
+      });
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleExport = () => {
-    if (results.length === 0) return alert("No data to export.");
+    if (results.length === 0) return showThemeModal({
+      title: 'No Data',
+      message: 'No data available to export.',
+      type: 'warning',
+      confirmText: 'OK'
+    });
     const flattenedData = [];
     let originalNMSHeaders = [];
     if (results[0] && results[0].rawRows && results[0].rawRows.length > 0) {
@@ -425,7 +551,12 @@ export default function SADashboard() {
       });
       setIsLoading(false);
     } catch (error) {
-      alert("Error loading stored data: " + error.message);
+      showThemeModal({
+        title: 'Load Error',
+        message: `Error loading stored data: ${error.message}`,
+        type: 'error',
+        confirmText: 'OK'
+      });
       setIsLoading(false);
     }
   };
@@ -434,7 +565,7 @@ export default function SADashboard() {
     try {
       const [updatedStoredData, lastModified] = await Promise.all([
         getUserUploadedDataSummary(10, dashboardMode),
-        getLastModifiedInfo()
+        getLastModifiedInfo(dashboardMode)
       ]);
       setStoredData(updatedStoredData);
       setLastModifiedInfo(lastModified);
@@ -488,7 +619,7 @@ export default function SADashboard() {
   }, [results, selectedGraphAlarm]);
 
   const filteredResults = useMemo(() => {
-    const term = debouncedTerm.toLowerCase();
+    const term = String(debouncedTerm || '').toLowerCase();
     if (!term) return results;
     
     return results.filter(row => {
@@ -649,82 +780,51 @@ export default function SADashboard() {
     }
     return null;
   };
-
-const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.email || "Unknown User";
-  const currentUserEmail = userInfo?.email || "No email";
-  // Smart fallback: keep undefined if no info exists
-  const lastModifiedName = lastModifiedInfo?.userDisplayName || lastModifiedInfo?.userName || lastModifiedInfo?.userEmail; 
+  const currentUserName = userInfo?.displayName || userInfo?.name || "Unknown User";
+  const engineerName = localStorage.getItem('globe_rsc_engineer') || currentUserName || "Workspace User";
+  const userInitial = engineerName.charAt(0).toUpperCase();
+  const lastModifiedName = lastModifiedInfo?.userDisplayName || lastModifiedInfo?.userName || "";
   const lastModifiedTimestamp = lastModifiedInfo?.timestamp
     ? new Date(lastModifiedInfo.timestamp).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
     : "No previous sync";
 
-  // Create a sleek avatar letter
-  const userInitials = currentUserName !== "Unknown User" ? currentUserName.charAt(0).toUpperCase() : "?";
-
   const headerActions = (
-    <div className="header-actions" style={{ display: 'flex', gap: '20px', alignItems: 'center', justifyContent: 'flex-end', paddingRight: '10px' }}>
-      
-      {isRefreshingSavedData && !isInitialDataLoading && (
-        <span style={{ fontSize: '0.75rem', color: 'var(--color-info)', fontWeight: 'bold', animation: 'pulse 1.5s infinite' }}>
-          Refreshing...
+    <div className="header-actions" style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', paddingLeft: '16px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', minWidth: 0, maxWidth: '280px' }}>
+        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', lineHeight: 1.2 }}>Last Modified:</span>
+        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {lastModifiedName ? `${lastModifiedTimestamp} | ${lastModifiedName}` : lastModifiedTimestamp}
         </span>
-      )}
+      </div>
 
-      {/* 1. Sleek Text-Only Last Modified (SMART RENDERING) */}
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: '1.3' }}>
-        <span style={{ fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)', fontWeight: 'bold' }}>
-          {lastModifiedName ? "Last Modified By" : "Database Status"}
-        </span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          {lastModifiedName ? (
-            <>
-              <span style={{ fontSize: '0.85rem', fontWeight: '700', color: 'var(--text-primary)' }}>
-                {lastModifiedName}
-              </span>
-              <span style={{ color: 'var(--text-secondary)', fontSize: '0.7rem' }}>•</span>
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                {lastModifiedTimestamp}
-              </span>
-            </>
-          ) : (
-            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
-              {lastModifiedTimestamp}
-            </span>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 0, flex: 1 }} />
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div className="export-dropdown-container" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setShowExportMenu(false); }} tabIndex={-1} style={{ position: 'relative' }}>
+          <button className="btn theme-toggle" onClick={() => setShowExportMenu(!showExportMenu)} disabled={results.length === 0} style={{
+            width: '36px', height: '36px', borderRadius: '50%', padding: 0,
+            background: 'var(--bg-input)', border: '1px solid var(--border-light)',
+            color: 'var(--text-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            cursor: results.length === 0 ? 'not-allowed' : 'pointer',
+            opacity: results.length === 0 ? 0.5 : 1, transition: 'all 0.2s ease', outline: 'none'
+          }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 4v10" />
+              <polyline points="8 10 12 14 16 10" />
+              <path d="M6 18h12" />
+            </svg>
+          </button>
+          {showExportMenu && (
+            <div className="export-menu" style={{ position: 'absolute', top: '110%', left: 0, zIndex: 50 }}>
+              <button onClick={() => { setShowExportMenu(false); handleExport(); }}>Export Raw Data</button>
+            </div>
           )}
         </div>
-      </div>
-
-      {/* Subtle Vertical Divider */}
-      <div style={{ width: '1px', height: '28px', backgroundColor: 'var(--border-light)', opacity: 0.8 }}></div>
-
-      {/* 2. Modern User Profile with Avatar */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: '1.3' }}>
-          <span style={{ fontWeight: '800', fontSize: '0.85rem', color: 'var(--text-primary)' }}>{currentUserName}</span>
-          <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{currentUserEmail}</span>
-        </div>
-        <div style={{
-          width: '36px', height: '36px', borderRadius: '50%',
-          background: 'linear-gradient(135deg, var(--brand-purple), #6b21a8)',
-          color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontWeight: 'bold', fontSize: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
-        }}>
-          {userInitials}
-        </div>
-      </div>
-
-      {/* Subtle Vertical Divider */}
-      <div style={{ width: '1px', height: '28px', backgroundColor: 'var(--border-light)', opacity: 0.8 }}></div>
-
-      {/* 3. Action Buttons (Theme & Export) */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-        
-        {/* Circular Theme Toggle */}
-        <button className="btn theme-toggle" onClick={toggleTheme} title="Toggle Theme" style={{ 
+        <button className="btn theme-toggle" onClick={toggleTheme} title="Toggle Theme" style={{
           width: '36px', height: '36px', borderRadius: '50%', padding: 0,
-          background: 'var(--bg-input)', border: '1px solid var(--border-light)', 
+          background: 'var(--bg-input)', border: '1px solid var(--border-light)',
           color: 'var(--text-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          cursor: 'pointer', transition: 'all 0.2s ease', outline: 'none' 
+          cursor: 'pointer', transition: 'all 0.2s ease', outline: 'none'
         }}>
           {isDarkMode ? (
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -739,23 +839,20 @@ const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.ema
             </svg>
           )}
         </button>
-
-        {/* Pill-shaped Export Button for SA Dashboard */}
-        <button 
-          onClick={handleExport} 
-          disabled={results.length === 0} 
-          style={{ 
-            height: '36px', borderRadius: '18px', padding: '0 16px',
-            background: 'var(--text-primary)', color: 'var(--bg-primary)',
-            border: 'none', fontWeight: 'bold', fontSize: '0.8rem',
-            cursor: results.length === 0 ? 'not-allowed' : 'pointer',
-            opacity: results.length === 0 ? 0.5 : 1, transition: 'all 0.2s ease', outline: 'none',
-            boxShadow: '0 2px 6px rgba(0,0,0,0.1)'
-          }}
-        >
-          Export Raw Data
-        </button>
-
+        <div style={{ width: '1px', height: '24px', background: 'rgba(128, 128, 128, 0.4)' }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div title={engineerName} style={{
+            width: '36px', height: '36px', borderRadius: '50%',
+            background: 'linear-gradient(135deg, var(--brand-purple), #6b21a8)',
+            color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontWeight: 'bold', fontSize: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
+          }}>
+            {userInitial}
+          </div>
+          <div style={{ textAlign: 'right', lineHeight: '1.2', minWidth: 0 }}>
+            <div style={{ fontWeight: '700', fontSize: '0.82rem', color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '130px' }}>{engineerName}</div>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -802,17 +899,22 @@ const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.ema
                       <input className="file-input" type="file" accept=".csv, .xlsx, .xls" onChange={(e) => handleFileChange(e, setMonitorFile1)} ref={monitorFile1Ref} />
                     </div>
                   </div>
-                  {dashboardMode === 'wireless' && (
-                    <div className="upload-group" style={{ marginTop: '20px' }}>
-                      <span className="input-label">SA MASTERLIST File</span>
-                      <div className="file-drop-area">
-                        <img src={isDarkMode ? fileDark : fileLight} className="upload-icon" alt="icon" style={{ width: '20px' }} />
-                        <span className="file-msg" style={{ marginTop: '8px' }}>{monitorFile2 ? monitorFile2.name : "Drag .xlsx, .xls, or .csv"}</span>
-                        <input className="file-input" type="file" accept=".csv, .xlsx, .xls" onChange={(e) => handleFileChange(e, setMonitorFile2)} ref={monitorFile2Ref} />
-                      </div>
+                  <div className="upload-group" style={{
+                    marginTop: isWirelessMode ? '20px' : '0px',
+                    maxHeight: isWirelessMode ? '260px' : '0px',
+                    opacity: isWirelessMode ? 1 : 0,
+                    overflow: 'hidden',
+                    transition: 'max-height 0.45s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.35s ease, margin-top 0.35s ease',
+                    pointerEvents: isWirelessMode ? 'auto' : 'none'
+                  }}>
+                    <span className="input-label">SA MASTERLIST File</span>
+                    <div className="file-drop-area">
+                      <img src={isDarkMode ? fileDark : fileLight} className="upload-icon" alt="icon" style={{ width: '20px' }} />
+                      <span className="file-msg" style={{ marginTop: '8px' }}>{monitorFile2 ? monitorFile2.name : "Drag .xlsx, .xls, or .csv"}</span>
+                      <input className="file-input" type="file" accept=".csv, .xlsx, .xls" onChange={(e) => handleFileChange(e, setMonitorFile2)} ref={monitorFile2Ref} />
                     </div>
-                  )}
-                  <button className="btn primary-filled scan-btn full-width" onClick={handleScan} disabled={isLoading} style={{background: 'var(--brand-purple)', color: '#ffffff', border: 'none', marginTop: '10px', padding: '12px', outline: 'none' }}>
+                  </div>
+                  <button className="btn primary-filled scan-btn full-width" onClick={handleScan} disabled={isLoading} style={{background: 'var(--brand-purple)', color: '#ffffff', border: 'none', marginTop: '10px', padding: '12px', outline: 'none', transform: dashboardMode === 'transport' ? 'translateY(-4px)' : 'translateY(0)', transition: 'transform 0.55s cubic-bezier(0.22, 1, 0.36, 1)', willChange: 'transform' }}>
                     <img src={searchIcon} alt="Scan" className="btn-icon" style={{ width: '16px', marginRight: '8px' }} />
                     <span>{isLoading ? "Processing Data..." : "Scan Data"}</span>
                   </button>
@@ -824,7 +926,7 @@ const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.ema
                   <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
                       <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'var(--text-primary)' }}>Top Alarms</h3>
-                      <button ref={expandBtnRef} onClick={openGraphModal} style={{ background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--color-info)', fontSize: '0.75rem', fontWeight: 'bold', cursor: 'pointer', padding: '5px 10px', borderRadius: '4px', outline: 'none' }}>Expand 📊</button>
+                      <button ref={expandBtnRef} onClick={openGraphModal} style={{ background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--color-info)', fontSize: '0.75rem', fontWeight: 'bold', cursor: 'pointer', padding: '5px 10px', borderRadius: '4px', outline: 'none' }}>Expand 📈</button>
                     </div>
                     <div className="custom-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto', overflowX: 'hidden', paddingRight: '5px' }}>
                       {alarmStats.map((stat, i) => ( 
@@ -896,16 +998,14 @@ const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.ema
                     <div style={{ background: 'var(--bg-primary)', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', marginBottom: '15px' }}>
                       <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Logged in as:</div>
                       <div style={{ fontWeight: 'bold', color: 'var(--brand-purple)' }}>{currentUserName}</div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{currentUserEmail}</div>
                     </div>
                   )}
 
-                  {lastModifiedInfo && (
+                  {lastModifiedInfo && lastModifiedInfo.timestamp && (
                     <div style={{ background: 'var(--bg-input)', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', marginBottom: '15px' }}>
                       <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '5px' }}>Last Data Modification:</div>
                       <div style={{ fontWeight: 'bold', color: 'var(--color-danger)' }}>{lastModifiedName}</div>
-                      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{lastModifiedEmail}</div>
-                      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
                         {lastModifiedInfo.action} • {lastModifiedInfo.fileName}
                       </div>
                       <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
@@ -940,7 +1040,7 @@ const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.ema
                       </div>
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '200px', color: 'var(--text-secondary)' }}>
-                        <div style={{ fontSize: '2rem', marginBottom: '10px' }}>📊</div>
+                        <div style={{ fontSize: '2rem', marginBottom: '10px' }}>📁</div>
                         <div>No stored data found</div>
                         <div style={{ fontSize: '0.8rem', marginTop: '5px' }}>Process some data to see it here</div>
                       </div>
@@ -963,7 +1063,6 @@ const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.ema
                     {dashboardMode === 'wireless' ? 'Wireless Critical Alerts' : 'Transport Critical Alerts'} ({filteredResults.length})
                   </h2>
                </div>
-              {/* 🚀 FIXED: Search Bar text color adapts to Dark Mode */}
               <input type="text" className="search-bar" placeholder="Search ID, Name, or Alarm..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} disabled={results.length === 0} style={{ outline: 'none' }}/>
             </div>
 
@@ -1040,6 +1139,39 @@ const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.ema
         </section>
       </main>
 
+      {themeModal.visible && (
+        <div className="theme-modal-overlay" onClick={handleThemeModalCancel}>
+          <div className="theme-modal-card" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+            <div className="theme-modal-header">
+              <h3>{themeModal.title}</h3>
+              <button className="theme-modal-close" onClick={handleThemeModalCancel} aria-label="Close">×</button>
+            </div>
+            <div className="theme-modal-body">
+              <p>{themeModal.message}</p>
+              {themeModal.input && (
+                <input
+                  type="text"
+                  value={themeModal.inputValue}
+                  onChange={(e) => setThemeModal(prev => ({ ...prev, inputValue: e.target.value }))}
+                  className="theme-modal-input"
+                  placeholder="Enter your name"
+                />
+              )}
+            </div>
+            <div className="theme-modal-actions">
+              {themeModal.cancelText && (
+                <button className="theme-modal-button secondary" onClick={handleThemeModalCancel}>
+                  {themeModal.cancelText}
+                </button>
+              )}
+              <button className="theme-modal-button primary" onClick={handleThemeModalConfirm}>
+                {themeModal.confirmText}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* THE VIRTUALIZED DRILL-DOWN MACBOOK MODAL */}
       {isDrillDownRendered && drillDownData && (
         <div className="map-modal-overlay" onClick={closeDrillDownModal} style={{ opacity: isDrillDownVisible ? 1 : 0, transition: 'opacity 0.3s ease', zIndex: 1000 }}>
@@ -1087,7 +1219,6 @@ const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.ema
 
                 <div style={{ background: 'var(--bg-input)', padding: '20px', borderRadius: '12px', border: '1px solid var(--border-light)', boxShadow: isDarkMode ? '0 4px 12px rgba(0,0,0,0.4)' : '0 4px 12px rgba(0,0,0,0.05)' }}>
                   <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', fontWeight: 'bold', textTransform: 'uppercase' }}>Total Occurrences</div>
-                  {/* 🚀 FIXED: Total Occurrences text is pure white in dark mode */}
                   <div style={{ fontSize: '2.2rem', fontWeight: 'bold', color: isDarkMode ? '#ffffff' : 'var(--brand-purple)', marginTop: '5px' }}>{totalOccurrences}</div>
                 </div>
                 <div style={{ background: 'var(--bg-input)', padding: '20px', borderRadius: '12px', border: '1px solid var(--border-light)', boxShadow: isDarkMode ? '0 4px 12px rgba(0,0,0,0.4)' : '0 4px 12px rgba(0,0,0,0.05)' }}>
@@ -1107,7 +1238,6 @@ const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.ema
                   <h4 style={{ margin: '0 0 15px 0', color: 'var(--text-primary)' }}>Alarm Frequency (All Types)</h4>
                   <div style={{ flex: 1, minHeight: 0 }}>
                     <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
-                      {/* 🚀 FIXED: The entire BarChart wrapper is clickable for filtering */}
                       <BarChart 
                         data={alarmStats} 
                         margin={{ top: 10, right: 10, left: 0, bottom: 0 }} 
@@ -1122,7 +1252,6 @@ const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.ema
                         <XAxis dataKey="name" stroke="var(--text-secondary)" tick={{fontSize: 10}} tickFormatter={(val) => val.length > 12 ? val.substring(0,12)+'...' : val} />
                         <YAxis stroke="var(--text-secondary)" tick={{fontSize: 12}} />
                         <RechartsTooltip cursor={{fill: isDarkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}} content={<CustomGraphTooltip />} />
-                        {/* 🚀 FIXED: activeBar allows clicking the empty space above the bar, added onClick to Bar */}
                         <Bar 
                           dataKey="count" 
                           radius={[4, 4, 0, 0]} 
@@ -1187,3 +1316,5 @@ const currentUserName = userInfo?.displayName || userInfo?.name || userInfo?.ema
     </DashboardLayout>
   );
 }
+
+
