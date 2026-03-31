@@ -136,7 +136,7 @@ body.dark-mode .btn {
 
 .file-drop-area {
   /* existing styles */
-    border: 10px dashed #000000 !important;
+    border: 1px dashed var(--border-light);
 }
 
 /* Sidebar Toggle Button */
@@ -347,3 +347,5 @@ body.dark-mode .drill-down-badge:hover {
   background-color: var(--color-danger);
   color: white;
 }
+
+

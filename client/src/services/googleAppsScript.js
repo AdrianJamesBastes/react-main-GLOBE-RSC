@@ -39,8 +39,9 @@ const API_BASE_URL = 'https://script.google.com/a/macros/umindanao.edu.ph/s/AKfy
  */
 export function storeUploadedData(fileName, dataType, rawData, processedData, metadata = {}) {
   const runner = getGoogleScriptRunner();
-  
   if (runner) {
+
+    
     return promisifyGasCall('storeUploadedData', fileName, dataType, rawData, processedData, metadata)
       .then(result => {
         if (!result.success) throw new Error(result.error || 'Failed to store data');

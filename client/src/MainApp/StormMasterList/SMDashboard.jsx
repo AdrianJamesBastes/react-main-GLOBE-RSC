@@ -681,11 +681,15 @@ const currentUserName = userInfo?.displayName || userInfo?.name || "Unknown User
         
         <aside className="sidebar" style={{ width: '320px', minWidth: '320px', flexShrink: 0 }}>
           
-          <div className="sidebar-top-section" ref={sidebarTopRef} style={{ width: '100%', flex: showHistoryPanel ? '1' : '0 0 350px' }}>
-            <div className={`sidebar-carousel ${showHistoryPanel ? 'show-history' : (selectedRowDetails ? 'show-details' : '')}`}>
+          {/* 🚀 1. Set flex: 1 and display: flex to force this section to grow and push the map down */}
+          <div className="sidebar-top-section" ref={sidebarTopRef} style={{ width: '100%', flex: showHistoryPanel ? '1' : '1', display: 'flex', flexDirection: 'column' }}>
+            
+            <div className={`sidebar-carousel ${showHistoryPanel ? 'show-history' : (selectedRowDetails ? 'show-details' : '')}`} style={{ flex: 1 }}>
               
-              <div className="carousel-panel">
+              {/* 🚀 2. Make the panel a flex column so we can space items dynamically */}
+              <div className="carousel-panel" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
                 <h3 style={{ marginTop: 0, marginBottom: '15px', fontSize: '1.1rem' }}>Data Input</h3>
+                
                 <div className="upload-group">
                   <span className="input-label">NMS CSV</span>
                   <div className="file-drop-area">
@@ -694,6 +698,7 @@ const currentUserName = userInfo?.displayName || userInfo?.name || "Unknown User
                     <input className="file-input" type="file" accept=".csv" onChange={(e) => handleFileChange(e, setMonitorFile1)} />
                   </div>
                 </div>
+                
                 <div className="upload-group">
                   <span className="input-label">UDM CSV</span>
                   <div className="file-drop-area">
@@ -702,7 +707,9 @@ const currentUserName = userInfo?.displayName || userInfo?.name || "Unknown User
                     <input className="file-input" type="file" accept=".csv" onChange={(e) => handleFileChange(e, setMonitorFile2)} />
                   </div>
                 </div>
-                <button className="btn primary-filled scan-btn full-width" onClick={handleScan} disabled={isLoading} style={{ marginTop: '10px', padding: '12px' }}>
+
+                {/* 🚀 3. marginTop: 'auto' forces this button to the absolute bottom of the empty space! */}
+                <button className="btn primary-filled scan-btn full-width" onClick={handleScan} disabled={isLoading} style={{ marginTop: 'auto', padding: '12px' }}>
                   <img src={search} alt="Scan" className="btn-icon" style={{ width: '16px' }} />
                   <span>{isLoading ? "Scanning..." : "Scan Files"}</span>
                 </button>
@@ -904,18 +911,21 @@ const currentUserName = userInfo?.displayName || userInfo?.name || "Unknown User
           </div>
 
           <div className="sidebar-map-wrapper" style={{ display: showHistoryPanel ? 'none' : 'flex' }}>
-            <div className="map-floating-header">
-              <span className="floating-title">Site Visualizer</span>
-              <button className="floating-btn" onClick={() => setShowBigMap(true)} aria-label="Expand map">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
-                  <path d="M4 8V4h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                  <path d="M20 16v4h-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                  <path d="M20 8h-4V4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                  <path d="M8 20H4v-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </button>
-            </div>
             <div className="mini-map">
+              
+              {/* 🚀 MOVED INSIDE THE MAP */}
+              <div className="map-floating-header">
+                <span className="floating-title">Site Visualizer</span>
+                <button className="floating-btn" onClick={() => setShowBigMap(true)} aria-label="Expand map">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <path d="M4 8V4h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M20 16v4h-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M20 8h-4V4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M8 20H4v-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              </div>
+
               {!showHistoryPanel && (
                 <MapVisualizer selectedSite={selectedSite} filteredResults={filteredResults} isExpanded={false} />
               )}
@@ -958,32 +968,32 @@ const currentUserName = userInfo?.displayName || userInfo?.name || "Unknown User
           <div className="output-card">
             <div className="dashboard-container">
               <AnalyticsDashboard data={results} activeFilter={filterStatus} onFilterChange={setFilterStatus} isDarkMode={isDarkMode} />
-              <div className="cards-section">
-                <div className={`stat-card luxury-glass total ${filterStatus === 'ALL' ? 'active' : ''}`} onClick={() => setFilterStatus('ALL')} style={{cursor: 'pointer'}}>
+              <div className={`cards-section ${results.length > 0 ? 'compact-mode' : ''}`}>
+                <div className={`stat-card luxury-glass total ${filterStatus === 'ALL' ? 'active' : ''} ${results.length > 0 ? 'compact-mode' : ''}`} onClick={() => setFilterStatus('ALL')} style={{cursor: 'pointer'}}>
                   <img src={isDarkMode ? ICONS.checkDark : ICONS.checkLight} className="stat-icon" alt="Total" />
                   <div className="stat-label">Total Validated</div>
                   <div className="stat-value">{stats.total}</div>
                 </div>
 
-                <div className={`stat-card luxury-glass unchanged ${filterStatus === 'UNCHANGED' ? 'active' : ''}`} onClick={() => setFilterStatus('UNCHANGED')} style={{cursor: 'pointer'}}>
+                <div className={`stat-card luxury-glass unchanged ${filterStatus === 'UNCHANGED' ? 'active' : ''} ${results.length > 0 ? 'compact-mode' : ''}`} onClick={() => setFilterStatus('UNCHANGED')} style={{cursor: 'pointer'}}>
                   <img src={isDarkMode ? ICONS.verifiedDark : ICONS.verifiedLight} className="stat-icon" alt="Verified" />
                   <div className="stat-label">Verified</div>
                   <div className="stat-value">{stats.unchanged}</div>
                 </div>
 
-                <div className={`stat-card luxury-glass new ${filterStatus === 'NEW' ? 'active' : ''}`} onClick={() => setFilterStatus('NEW')} style={{cursor: 'pointer'}}>
+                <div className={`stat-card luxury-glass new ${filterStatus === 'NEW' ? 'active' : ''} ${results.length > 0 ? 'compact-mode' : ''}`} onClick={() => setFilterStatus('NEW')} style={{cursor: 'pointer'}}>
                   <img src={isDarkMode ? ICONS.glitterDark : ICONS.glitterLight} className="stat-icon" alt="New" />
                   <div className="stat-label">New In NMS</div>
                   <div className="stat-value">{stats.new}</div>
                 </div>
 
-                <div className={`stat-card luxury-glass removed ${filterStatus === 'REMOVED' ? 'active' : ''}`} onClick={() => setFilterStatus('REMOVED')} style={{cursor: 'pointer'}}>
+                <div className={`stat-card luxury-glass removed ${filterStatus === 'REMOVED' ? 'active' : ''} ${results.length > 0 ? 'compact-mode' : ''}`} onClick={() => setFilterStatus('REMOVED')} style={{cursor: 'pointer'}}>
                   <img src={isDarkMode ? ICONS.removedDark : ICONS.removedLight} className="stat-icon" alt="Removed" />
                   <div className="stat-label">Missing (Removed)</div>
                   <div className="stat-value">{stats.removed}</div>
                 </div>
 
-                <div className={`stat-card luxury-glass mismatch ${filterStatus === 'MISMATCH' ? 'active' : ''}`} onClick={() => setFilterStatus('MISMATCH')} style={{cursor: 'pointer'}}>
+                <div className={`stat-card luxury-glass mismatch ${filterStatus === 'MISMATCH' ? 'active' : ''} ${results.length > 0 ? 'compact-mode' : ''}`} onClick={() => setFilterStatus('MISMATCH')} style={{cursor: 'pointer'}}>
                   <img src={isDarkMode ? ICONS.warningDark : ICONS.warningLight} className="stat-icon" alt="Warning" />
                   <div className="stat-label">Discrepancy</div>
                   <div className="stat-value">{stats.mismatch}</div>

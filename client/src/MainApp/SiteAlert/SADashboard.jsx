@@ -19,13 +19,12 @@ import fileLight from '../../assets/fileLight.png';
 import warningDark from '../../assets/warningDark.png';
 
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Cell, Rectangle } from 'recharts';
+import { FixedSizeList as List, VariableSizeList } from 'react-window'; // 🚀 THE CRASH FIX IMPORT!
 
 import * as XLSX from 'xlsx';
 import { useNavigate } from "react-router-dom";
 
-// Removed getTechSplits since we do vertical rows now!
 import { parseLocationData, getShortRegionByProvince } from '../../utils/telecom';
-// Added the dictionary import so your Triple Fallback works!
 import { cityToProvinceMap } from '../MapDictionary/TelecomDictionaries';
 import DashboardLayout from '../../components/DashboardLayout';
 import { ThemedButton, ThemedBadge } from '../../components/common';
@@ -154,7 +153,7 @@ export default function SADashboard() {
     setIsSidebarCollapsed(false);
   };
 
-const readCache = () => {
+  const readCache = () => {
     try {
       const raw = localStorage.getItem(cacheKey);
       if (!raw) return null;
@@ -173,15 +172,14 @@ const readCache = () => {
       if (cachePayload.latestStoredData && cachePayload.latestStoredData.processedData) {
          const slimProcessedData = cachePayload.latestStoredData.processedData.map(item => {
             const { rawRows, ...rest } = item; 
-            return rest; // Cache everything EXCEPT the heavy rawRows
+            return rest; 
          });
          cachePayload.latestStoredData = { ...cachePayload.latestStoredData, processedData: slimProcessedData };
       }
 
       localStorage.setItem(cacheKey, JSON.stringify({ ...cachePayload, timestamp: Date.now() }));
     } catch (error) {
-      console.warn("⚠️ Cache Write Failed (Likely Exceeded 5MB limit):", error);
-      // Failsafe: Clear the bloated cache so it doesn't corrupt the app
+      console.warn("⚠️ Cache Write Failed:", error);
       localStorage.removeItem(cacheKey); 
     }
   };
@@ -193,12 +191,10 @@ const readCache = () => {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Load user info and stored data on mount
   useEffect(() => {
     let isMounted = true;
 
     const loadUserData = async () => {
-      // STEP 1: INSTANT LOAD FROM CACHE (Stale data)
       const cached = readCache();
       if (cached && isMounted) {
         setStoredData(cached.storedData || []);
@@ -209,7 +205,6 @@ const readCache = () => {
         setIsInitialDataLoading(false); 
       }
 
-      // STEP 2: SILENT BACKGROUND FETCH (Fresh data)
       try {
         setIsRefreshingSavedData(true);
         const [storedDataList, latestStoredData, lastModified] = await Promise.all([
@@ -218,7 +213,6 @@ const readCache = () => {
           getLastModifiedInfo(dashboardMode)
         ]);
         
-        // ONLY UPDATE IF WE HAVEN'T SWITCHED MODES
         if (isMounted) {
           setStoredData(storedDataList);
           setLastModifiedInfo(lastModified);
@@ -237,13 +231,12 @@ const readCache = () => {
       } finally {
         if (isMounted) {
           setIsRefreshingSavedData(false);
-          setIsInitialDataLoading(false); // Turns off the loading screen we triggered in the toggle!
+          setIsInitialDataLoading(false); 
         }
       }
     };
     loadUserData();
 
-    //CLEANUP FUNCTION - If user clicks toggle, kill the previous fetch!
     return () => {
       isMounted = false;
     };
@@ -287,7 +280,7 @@ const readCache = () => {
       position: 'absolute',
       inset: 0,
       padding: '12px',
-      overflowY: 'auto',
+      overflow: 'hidden', // 🚀 LOCKED SCROLLBAR FIX
       transition: 'transform 0.35s ease, opacity 0.35s ease',
       background: 'var(--bg-secondary)'
     };
@@ -406,28 +399,28 @@ const readCache = () => {
       if (nmsData.length === 0) throw new Error("NMS File is empty.");
 
       let result;
-      let processedData;
 
+      // 1. Fetch raw result based on mode
       if (dashboardMode === 'wireless') {
         const masterData = await readUniversalFile(monitorFile2);
         result = processWirelessAlarms(nmsData, masterData);
-        processedData = result.data;
       } else {
         result = processTransportAlarms(nmsData);
-        processedData = result.data.map((item) => ({
-          alert: item.alarm || "N/A",
-          dn: item.li || "N/A",
-          name: item.sn || "N/A",
-          pla: item.severity || "N/A",
-          count: item.count,
-          rawRows: item.rawRows
-        }));
       }
 
-      if (result.success && Array.isArray(processedData) && processedData.length > 0) {
-        const safeProcessedData = Array.isArray(processedData)
-          ? processedData.filter((row) => row && typeof row === 'object')
-          : [];
+      // 🚀 2. THE UNIVERSAL SAFE MAPPER (Fixes the NaN Crash)
+      const rawDataArray = Array.isArray(result?.data) ? result.data : [];
+      const safeProcessedData = rawDataArray.map((item) => ({
+        alert: item.alert || item.alarm || "N/A",
+        dn: item.dn || item.li || item.locationInfo || "N/A",
+        name: item.name || item.sn || item.siteName || "N/A",
+        pla: item.pla || item.severity || item.plaId || "N/A",
+        count: Number(item.count) || 1, 
+        rawRows: item.rawRows || []
+      }));
+
+      // 3. Continue with the standard save sequence
+      if (result.success && safeProcessedData.length > 0) {
         setResults(safeProcessedData);
         handleSidebarViewChange('analytics');
         setIsSidebarCollapsed(false);
@@ -483,7 +476,7 @@ const readCache = () => {
           confirmText: 'OK'
         });
       }
-    } catch (error) {
+    } catch (error) { 
       showThemeModal({
         title: 'Read Error',
         message: `Error reading files: ${error.message}`,
@@ -807,6 +800,7 @@ const readCache = () => {
     }
     return null;
   };
+
   const currentUserName = userInfo?.displayName || userInfo?.name || "Unknown User";
   const engineerName = localStorage.getItem('globe_rsc_engineer') || currentUserName || "Workspace User";
   const userInitial = engineerName.charAt(0).toUpperCase();
@@ -895,11 +889,42 @@ const readCache = () => {
 
       <main className="main-layout" style={{ display: 'flex', overflow: 'hidden', transition: 'gap 0.4s cubic-bezier(0.4, 0, 0.2, 1)', gap: isSidebarCollapsed ? '0px' : '' }}>
         <aside className="sidebar" style={{ width: isSidebarCollapsed ? '0px' : '320px', minWidth: isSidebarCollapsed ? '0px' : '320px', overflow: 'hidden', transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)', borderRight: isSidebarCollapsed ? 'none' : '1px solid var(--border-light)', opacity: isSidebarCollapsed ? 0 : 1, display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)' }}>
-            <div style={{ display: 'flex', borderBottom: '1px solid var(--border-light)', flexShrink: 0, background: 'var(--bg-primary)' }}>
-              <button onClick={() => handleSidebarViewChange('input')} style={{ flex: 1, padding: '12px 0', fontSize: '0.75rem', fontWeight: 'bold', background: 'none', border: 'none', outline: 'none', cursor: 'pointer', transition: 'all 0.2s', borderBottom: activeSidebarView === 'input' ? (isDarkMode ? '3px solid #ffffff' : '3px solid var(--brand-purple)') : '3px solid transparent', color: activeSidebarView === 'input' ? (isDarkMode ? '#ffffff' : 'var(--brand-purple)') : 'var(--text-secondary)' }}>DATA INPUT</button>
-              <button onClick={() => handleSidebarViewChange('analytics')} disabled={results.length === 0} style={{ flex: 1, padding: '12px 0', fontSize: '0.75rem', fontWeight: 'bold', background: 'none', border: 'none', outline: 'none', transition: 'all 0.2s', cursor: results.length === 0 ? 'not-allowed' : 'pointer', opacity: results.length === 0 ? 0.4 : 1, borderBottom: activeSidebarView === 'analytics' ? (isDarkMode ? '3px solid #ffffff' : '3px solid var(--brand-purple)') : '3px solid transparent', color: activeSidebarView === 'analytics' ? (isDarkMode ? '#ffffff' : 'var(--brand-purple)') : 'var(--text-secondary)' }}>ANALYTICS</button>
-              <button onClick={() => handleSidebarViewChange('details')} disabled={!selectedRowDetails} style={{ flex: 1, padding: '12px 0', fontSize: '0.75rem', fontWeight: 'bold', background: 'none', border: 'none', outline: 'none', transition: 'all 0.2s', cursor: !selectedRowDetails ? 'not-allowed' : 'pointer', opacity: !selectedRowDetails ? 0.4 : 1, borderBottom: activeSidebarView === 'details' ? (isDarkMode ? '3px solid #ffffff' : '3px solid var(--brand-purple)') : '3px solid transparent', color: activeSidebarView === 'details' ? (isDarkMode ? '#ffffff' : 'var(--brand-purple)') : 'var(--text-secondary)' }}>DETAILS</button>
-              <button onClick={() => handleSidebarViewChange('history')} style={{ flex: 1, padding: '12px 0', fontSize: '0.75rem', fontWeight: 'bold', background: 'none', border: 'none', outline: 'none', cursor: 'pointer', transition: 'all 0.2s', borderBottom: activeSidebarView === 'history' ? (isDarkMode ? '3px solid #ffffff' : '3px solid var(--brand-purple)') : '3px solid transparent', color: activeSidebarView === 'history' ? (isDarkMode ? '#ffffff' : 'var(--brand-purple)') : 'var(--text-secondary)' }}>HISTORY</button>
+            
+          {/* 🚀 THE MODERN HORIZONTAL TAB BAR (Using CSS Classes) */}
+            <div className="sa-sidebar-tabs-wrap">
+              <div className="sa-sidebar-tabs">
+                
+                <button 
+                  className={`sa-sidebar-tab-btn ${activeSidebarView === 'input' ? 'active' : ''}`}
+                  onClick={() => handleSidebarViewChange('input')} 
+                >
+                  Input
+                </button>
+
+                <button 
+                  className={`sa-sidebar-tab-btn ${activeSidebarView === 'analytics' ? 'active' : ''}`}
+                  onClick={() => handleSidebarViewChange('analytics')} 
+                  disabled={results.length === 0} 
+                >
+                  Analytics
+                </button>
+
+                <button 
+                  className={`sa-sidebar-tab-btn ${activeSidebarView === 'details' ? 'active' : ''}`}
+                  onClick={() => handleSidebarViewChange('details')} 
+                  disabled={!selectedRowDetails} 
+                >
+                  Details
+                </button>
+
+                <button 
+                  className={`sa-sidebar-tab-btn ${activeSidebarView === 'history' ? 'active' : ''}`}
+                  onClick={() => handleSidebarViewChange('history')} 
+                >
+                  History
+                </button>
+
+              </div>
             </div>
 
             <div style={{ position: 'relative', flex: 1, minHeight: 0, overflow: 'hidden' }}>
@@ -953,7 +978,7 @@ const readCache = () => {
               <div style={getSidebarPanelStyle('analytics')}>
                 <div style={sidebarInnerCardStyle}>
                   {alarmStats.length > 0 ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
                         <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'var(--text-primary)' }}>Top Alarms</h3>
                         <button ref={expandBtnRef} onClick={openGraphModal} style={{ background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--color-info)', fontSize: '0.75rem', fontWeight: 'bold', cursor: 'pointer', padding: '5px 10px', borderRadius: '4px', outline: 'none' }}>Expand 📈</button>
@@ -981,7 +1006,7 @@ const readCache = () => {
               <div style={getSidebarPanelStyle('details')}>
                 <div style={sidebarInnerCardStyle}>
                   {selectedRowDetails ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
                       <h3 style={{ margin: 0, marginBottom: '20px', fontSize: '1.1rem', color: 'var(--text-primary)' }}>Alert Breakdown</h3>
                       <div className="details-content custom-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
                         <div style={{ background: 'var(--bg-primary)', padding: '15px', borderRadius: '8px', border: '1px solid var(--border-light)', borderLeft: '4px solid var(--color-danger)' }}>
@@ -1022,7 +1047,7 @@ const readCache = () => {
 
               <div style={getSidebarPanelStyle('history')}>
                 <div style={sidebarInnerCardStyle}>
-                  <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
                     <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'var(--text-primary)' }}>Data History</h3>
                     <button onClick={handleRefreshStoredData} style={{ background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--color-info)', fontSize: '0.75rem', fontWeight: 'bold', cursor: 'pointer', padding: '5px 10px', borderRadius: '4px', outline: 'none' }}>Refresh</button>
@@ -1063,7 +1088,6 @@ const readCache = () => {
                               </div>
                             </div>
                             
-                            {/* 🚀 ADDED THE ENGINEER NAME DISPLAY HERE */}
                             <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '5px' }}>
                               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
                               Ran by: <span style={{color: 'var(--text-primary)', fontWeight: '600'}}>{item.metadata?.engineerName || "Workspace User"}</span>
@@ -1360,5 +1384,3 @@ const readCache = () => {
     </DashboardLayout>
   );
 }
-
-
