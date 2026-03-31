@@ -286,7 +286,7 @@ const readCache = () => {
     const base = {
       position: 'absolute',
       inset: 0,
-      padding: '1.5rem',
+      padding: '12px',
       overflowY: 'auto',
       transition: 'transform 0.35s ease, opacity 0.35s ease',
       background: 'var(--bg-secondary)'
@@ -301,6 +301,19 @@ const readCache = () => {
     }
 
     return { ...base, opacity: 0, transform: `translateX(${distance}%)`, zIndex: 0, pointerEvents: 'none' };
+  };
+
+  const sidebarInnerCardStyle = {
+    height: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+    boxSizing: 'border-box',
+    padding: '14px',
+    borderRadius: '12px',
+    border: '1px solid var(--border-light)',
+    background: 'var(--bg-primary)',
+    boxShadow: isDarkMode ? '0 4px 14px rgba(0, 0, 0, 0.25)' : '0 4px 12px rgba(0, 0, 0, 0.06)',
+    overflow: 'hidden'
   };
 
   const handleModeToggle = () => {
@@ -347,83 +360,16 @@ const readCache = () => {
               break;
             }
           }
-
-  const handleSpecificExport = (exportCategory) => {
-    setShowExportMenu(false);
-    if (results.length === 0) return alert("No data to export.");
-
-    const dataToExport = exportCategory === 'ALL' ? results : results.filter(row => row.matchStatus === exportCategory);
-    if (dataToExport.length === 0) return alert(`There are no "${exportCategory}" sites to export.`);
-
-    // Using flatMap to create multiple rows per site based on Technology!
-    const excelData = dataToExport.flatMap(row => {
-      const geo = parseLocationData(row.baseLocation);
-      
-      // FALLBACK 1: Try raw UDM province
-      let reg = getShortRegionByProvince(row.prov);
-
-      // FALLBACK 2: Try parsed Site Name province
-      if (!reg && geo.province) {
-        reg = getShortRegionByProvince(geo.province);
-      }
-
-      // FALLBACK 3: City guess
-      if (!reg && row.mCity) {
-        const cleanCity = String(row.mCity).toUpperCase().trim();
-        const fallbackProv = cityToProvinceMap[cleanCity];
-        if (fallbackProv) reg = getShortRegionByProvince(fallbackProv);
-      }
-
-      // HELPER: This creates the exact Excel row structure you want
-      const buildExcelRow = (techLabel, specificTechName) => ({
-        "Region": "MIN",
-        "PLA ID": row.plaId || "",
-        "PLA Status": "",
-        "Area": row.sArea || "",
-        "Region ": (geo.region || reg) || "",
-        "Province": (geo.province || row.prov) || "",
-        "City/Municipality": (geo.city || row.mCity) || "",
-        "Barangay": "",
-        "Site Address": row.sAdd || "",
-        "Longitude": row.lng || "",
-        "Latitude": row.lat || "",
-        "Technology": techLabel,            // <--- Outputting the 2G/4G/5G label
-        "Tech Name/ BTS": specificTechName, // <--- Outputting the specific string
-        "Tech Description": "",
-        "Tech Status": "",
-        "Site Owner": row.siteOwner || geo.siteCode || "GLOBE TELECOM",
-        "Territory": row.trt || "",
-        "Hiroshima Severity": row.hSvr || "",
-        "Remarks": row.remarks || "",
-        "Remarks Status": row.matchStatus || ""
-      });
-
-      let expandedRows = [];
-
-      // SCENARIO A: If the site was REMOVED, it only exists in UDM, so it has no NMS splits.
-      if (row.matchStatus === 'REMOVED') {
-        expandedRows.push(buildExcelRow("UDM Only", row.techName));
-      } 
-      // SCENARIO B: Split the NMS strings into vertical rows!
-      else {
-        // Look for the original strings sent from the backend and split them by the " | " separator
-        if (row.original2G) {
-          row.original2G.split(" | ").forEach(nmsName => expandedRows.push(buildExcelRow("2G", nmsName)));
+          const jsonData = XLSX.utils.sheet_to_json(worksheet, { 
+            range: headerRowIndex, 
+            defval: "" 
+          });
+          resolve(jsonData);
+        } catch {
+          reject(new Error("Failed to parse file."));
         }
-        if (row.original4G) {
-          row.original4G.split(" | ").forEach(nmsName => expandedRows.push(buildExcelRow("4G", nmsName)));
-        }
-        if (row.original5G) {
-          row.original5G.split(" | ").forEach(nmsName => expandedRows.push(buildExcelRow("5G", nmsName)));
-        }
-        
-        // Safety net: If a row somehow has no tech strings, just print the base name.
-        if (expandedRows.length === 0) {
-          expandedRows.push(buildExcelRow("Unknown", row.techName));
-        }
-      }
-
-      return expandedRows; // flatMap merges all these into the main Excel sheet!
+      };
+      reader.onerror = (err) => reject(err);
     });
   };
 
@@ -437,23 +383,177 @@ const readCache = () => {
           confirmText: 'OK'
         });
       }
-    } else {
-      if (!monitorFile1) {
-        return showThemeModal({
-          title: 'Missing File',
-          message: 'Please upload the NMS file.',
-          type: 'warning',
-          confirmText: 'OK'
-        });
-      }
+    } else if (!monitorFile1) {
+      return showThemeModal({
+        title: 'Missing File',
+        message: 'Please upload the NMS file.',
+        type: 'warning',
+        confirmText: 'OK'
+      });
     }
 
     let engineerName = localStorage.getItem('globe_rsc_engineer');
-    
-    // Auto-size the Excel columns
-    const columnWidths = headers.map(header => {
-      let maxLength = header.length; 
-      excelData.forEach(row => {
+    if (!engineerName) {
+      return askForEngineerName();
+    }
+
+    setIsLoading(true);
+    setResults([]);
+    setSelectedRowDetails(null);
+
+    try {
+      const nmsData = await readUniversalFile(monitorFile1);
+      if (nmsData.length === 0) throw new Error("NMS File is empty.");
+
+      let result;
+      let processedData;
+
+      if (dashboardMode === 'wireless') {
+        const masterData = await readUniversalFile(monitorFile2);
+        result = processWirelessAlarms(nmsData, masterData);
+        processedData = result.data;
+      } else {
+        result = processTransportAlarms(nmsData);
+        processedData = result.data.map((item) => ({
+          alert: item.alarm || "N/A",
+          dn: item.li || "N/A",
+          name: item.sn || "N/A",
+          pla: item.severity || "N/A",
+          count: item.count,
+          rawRows: item.rawRows
+        }));
+      }
+
+      if (result.success && Array.isArray(processedData) && processedData.length > 0) {
+        const safeProcessedData = Array.isArray(processedData)
+          ? processedData.filter((row) => row && typeof row === 'object')
+          : [];
+        setResults(safeProcessedData);
+        handleSidebarViewChange('analytics');
+        setIsSidebarCollapsed(false);
+
+        const fileNames = dashboardMode === 'wireless'
+          ? `${monitorFile1.name} + ${monitorFile2.name}`
+          : monitorFile1.name;
+
+        storeUploadedData(
+          fileNames,
+          dashboardMode,
+          [],
+          safeProcessedData,
+          {
+            totalRecords: nmsData.length,
+            processedRecords: safeProcessedData.length,
+            dashboardMode,
+            timestamp: new Date().toISOString(),
+            engineerName
+          }
+        )
+          .then(async () => {
+            const [updatedStoredData, lastModified] = await Promise.all([
+              getUserUploadedDataSummary(10, dashboardMode),
+              getLastModifiedInfo(dashboardMode)
+            ]);
+            setStoredData(updatedStoredData);
+            setLastModifiedInfo(lastModified);
+            writeCache({
+              userInfo,
+              storedData: updatedStoredData,
+              lastModifiedInfo: lastModified,
+              latestStoredData: {
+                processedData: safeProcessedData,
+                fileName: fileNames
+              }
+            });
+          })
+          .catch((storeError) => {
+            console.error('Failed to store data:', storeError);
+            showThemeModal({
+              title: 'Save Warning',
+              message: 'Data was processed successfully but failed to save to database. You can still view the results.',
+              type: 'warning',
+              confirmText: 'OK'
+            });
+          });
+      } else {
+        showThemeModal({
+          title: result.success ? 'No Matches' : 'Processing Error',
+          message: result.success ? 'No matching alarms were found.' : `Error: ${result.error}`,
+          type: result.success ? 'info' : 'error',
+          confirmText: 'OK'
+        });
+      }
+    } catch (error) {
+      showThemeModal({
+        title: 'Read Error',
+        message: `Error reading files: ${error.message}`,
+        type: 'error',
+        confirmText: 'OK'
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleExport = () => {
+    if (results.length === 0) {
+      return showThemeModal({
+        title: 'No Data',
+        message: 'No data available to export.',
+        type: 'warning',
+        confirmText: 'OK'
+      });
+    }
+
+    const flattenedData = [];
+    let originalNMSHeaders = [];
+    if (results[0] && results[0].rawRows && results[0].rawRows.length > 0) {
+      originalNMSHeaders = Object.keys(results[0].rawRows[0]);
+    }
+
+    const strictHeaderOrder = dashboardMode === 'wireless'
+      ? ["Severity Rank", "Total Repetitions", "Occurrence #", "Masterlist PLA_ID", "Masterlist Site Name", "Distinguished Name", "Alarm Text", ...originalNMSHeaders]
+      : ["Severity Rank", "Total Repetitions", "Occurrence #", "Severity", "Site Name (Alarm Source)", "Location Info", "Alarm Name", ...originalNMSHeaders];
+
+    results.forEach((group, groupIndex) => {
+      if (group.rawRows) {
+        group.rawRows.forEach((rawRow, idx) => {
+          const formattedRawRow = {};
+          originalNMSHeaders.forEach((key) => {
+            const value = rawRow[key];
+            const isTimeCol = key.toLowerCase().includes('time') || key.toLowerCase().includes('date') || key.toLowerCase().includes('stamp');
+            if (isTimeCol && typeof value === 'number' && value > 30000) {
+              const dateObj = new Date(Math.round((value - 25569) * 86400 * 1000));
+              const m = dateObj.getUTCMonth() + 1;
+              const d = dateObj.getUTCDate();
+              const y = dateObj.getUTCFullYear();
+              const hh = String(dateObj.getUTCHours()).padStart(2, '0');
+              const mm = String(dateObj.getUTCMinutes()).padStart(2, '0');
+              const ss = String(dateObj.getUTCSeconds()).padStart(2, '0');
+              formattedRawRow[key] = `${m}/${d}/${y} ${hh}:${mm}:${ss}`;
+            } else {
+              formattedRawRow[key] = (value === null || value === undefined) ? "" : value;
+            }
+          });
+
+          flattenedData.push({
+            "Severity Rank": groupIndex + 1,
+            "Total Repetitions": group.count,
+            "Occurrence #": idx + 1,
+            [dashboardMode === 'wireless' ? "Masterlist PLA_ID" : "Severity"]: group.pla || "N/A",
+            [dashboardMode === 'wireless' ? "Masterlist Site Name" : "Site Name (Alarm Source)"]: group.name || "N/A",
+            [dashboardMode === 'wireless' ? "Distinguished Name" : "Location Info"]: group.dn || "N/A",
+            [dashboardMode === 'wireless' ? "Alarm Text" : "Alarm Name"]: group.alert || "N/A",
+            ...formattedRawRow
+          });
+        });
+      }
+    });
+
+    const worksheet = XLSX.utils.json_to_sheet(flattenedData, { header: strictHeaderOrder });
+    const columnWidths = strictHeaderOrder.map((header) => {
+      let maxLength = header.length;
+      flattenedData.forEach((row) => {
         const cellValue = row[header] ? row[header].toString() : "";
         if (cellValue.length > maxLength) maxLength = cellValue.length;
       });
@@ -461,13 +561,8 @@ const readCache = () => {
     });
     worksheet['!cols'] = columnWidths;
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Masterlist Data");
-    
-    // Generate the file name with today's date
-    const dateStr = new Date().toISOString().split('T')[0];
-    const fileName = `StormMasterlist_${exportCategory === 'ALL' ? 'Complete' : exportCategory}_${dateStr}.xlsx`;
-    
-    XLSX.writeFile(workbook, fileName);
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Raw Alarms");
+    XLSX.writeFile(workbook, `${dashboardMode.toUpperCase()}_SiteAlerts_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
   const handleLoadStoredData = async (storedDataItem) => {
@@ -809,118 +904,125 @@ const readCache = () => {
 
             <div style={{ position: 'relative', flex: 1, minHeight: 0, overflow: 'hidden' }}>
               <div style={getSidebarPanelStyle('input')}>
-                <div className="data-input-section" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
-                    <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'var(--text-primary)' }}>
-                      {dashboardMode === 'wireless' ? 'Wireless' : 'Transport'}
-                    </h3>
-                    <button 
-                      onClick={handleModeToggle}
-                      title="Swap Dashboard Mode"
-                      style={{ background: isDarkMode ? 'var(--bg-input)' : '#ffffff', border: '1px solid var(--border-color)', borderRadius: '20px', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: isDarkMode ? '#ffffff' : 'var(--brand-purple)', fontSize: '0.75rem', fontWeight: 'bold', transition: 'all 0.2s', outline: 'none' }}
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3v18"/><path d="M10 18l-3 3-3-3"/><path d="M7 3v18"/><path d="M20 6l-3-3-3 3"/></svg>
+                <div style={sidebarInnerCardStyle}>
+                  <div className="data-input-section" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+                      <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'var(--text-primary)' }}>
+                        {dashboardMode === 'wireless' ? 'Wireless' : 'Transport'}
+                      </h3>
+                      <button 
+                        onClick={handleModeToggle}
+                        title="Swap Dashboard Mode"
+                        style={{ background: isDarkMode ? 'var(--bg-input)' : '#ffffff', border: '1px solid var(--border-color)', borderRadius: '20px', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', color: isDarkMode ? '#ffffff' : 'var(--brand-purple)', fontSize: '0.75rem', fontWeight: 'bold', transition: 'all 0.2s', outline: 'none' }}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3v18"/><path d="M10 18l-3 3-3-3"/><path d="M7 3v18"/><path d="M20 6l-3-3-3 3"/></svg>
+                      </button>
+                    </div>
+
+                    <div className="upload-group">
+                      <span className="input-label">NMS File</span>
+                      <div className="file-drop-area">
+                        <img src={isDarkMode ? fileDark : fileLight} className="upload-icon" alt="icon" style={{ width: '20px' }} />
+                        <span className="file-msg" style={{ marginTop: '8px' }}>{monitorFile1 ? monitorFile1.name : "Drag .xlsx, .xls, or .csv"}</span>
+                        <input className="file-input" type="file" accept=".csv, .xlsx, .xls" onChange={(e) => handleFileChange(e, setMonitorFile1)} ref={monitorFile1Ref} />
+                      </div>
+                    </div>
+                    <div className="upload-group" style={{
+                      marginTop: isWirelessMode ? '20px' : '0px',
+                      maxHeight: isWirelessMode ? '260px' : '0px',
+                      opacity: isWirelessMode ? 1 : 0,
+                      overflow: 'hidden',
+                      transition: 'max-height 0.45s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.35s ease, margin-top 0.35s ease',
+                      pointerEvents: isWirelessMode ? 'auto' : 'none'
+                    }}>
+                      <span className="input-label">SA MASTERLIST File</span>
+                      <div className="file-drop-area">
+                        <img src={isDarkMode ? fileDark : fileLight} className="upload-icon" alt="icon" style={{ width: '20px' }} />
+                        <span className="file-msg" style={{ marginTop: '8px' }}>{monitorFile2 ? monitorFile2.name : "Drag .xlsx, .xls, or .csv"}</span>
+                        <input className="file-input" type="file" accept=".csv, .xlsx, .xls" onChange={(e) => handleFileChange(e, setMonitorFile2)} ref={monitorFile2Ref} />
+                      </div>
+                    </div>
+                    <button className="btn primary-filled scan-btn full-width" onClick={handleScan} disabled={isLoading} style={{background: 'var(--brand-purple)', color: '#ffffff', border: 'none', marginTop: '10px', padding: '12px', outline: 'none', transform: dashboardMode === 'transport' ? 'translateY(-4px)' : 'translateY(0)', transition: 'transform 0.55s cubic-bezier(0.22, 1, 0.36, 1)', willChange: 'transform' }}>
+                      <img src={searchIcon} alt="Scan" className="btn-icon" style={{ width: '16px', marginRight: '8px' }} />
+                      <span>{isLoading ? "Processing Data..." : "Scan Data"}</span>
                     </button>
                   </div>
-
-                  <div className="upload-group">
-                    <span className="input-label">NMS File</span>
-                    <div className="file-drop-area">
-                      <img src={isDarkMode ? fileDark : fileLight} className="upload-icon" alt="icon" style={{ width: '20px' }} />
-                      <span className="file-msg" style={{ marginTop: '8px' }}>{monitorFile1 ? monitorFile1.name : "Drag .xlsx, .xls, or .csv"}</span>
-                      <input className="file-input" type="file" accept=".csv, .xlsx, .xls" onChange={(e) => handleFileChange(e, setMonitorFile1)} ref={monitorFile1Ref} />
-                    </div>
-                  </div>
-                  <div className="upload-group" style={{
-                    marginTop: isWirelessMode ? '20px' : '0px',
-                    maxHeight: isWirelessMode ? '260px' : '0px',
-                    opacity: isWirelessMode ? 1 : 0,
-                    overflow: 'hidden',
-                    transition: 'max-height 0.45s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.35s ease, margin-top 0.35s ease',
-                    pointerEvents: isWirelessMode ? 'auto' : 'none'
-                  }}>
-                    <span className="input-label">SA MASTERLIST File</span>
-                    <div className="file-drop-area">
-                      <img src={isDarkMode ? fileDark : fileLight} className="upload-icon" alt="icon" style={{ width: '20px' }} />
-                      <span className="file-msg" style={{ marginTop: '8px' }}>{monitorFile2 ? monitorFile2.name : "Drag .xlsx, .xls, or .csv"}</span>
-                      <input className="file-input" type="file" accept=".csv, .xlsx, .xls" onChange={(e) => handleFileChange(e, setMonitorFile2)} ref={monitorFile2Ref} />
-                    </div>
-                  </div>
-                  <button className="btn primary-filled scan-btn full-width" onClick={handleScan} disabled={isLoading} style={{background: 'var(--brand-purple)', color: '#ffffff', border: 'none', marginTop: '10px', padding: '12px', outline: 'none', transform: dashboardMode === 'transport' ? 'translateY(-4px)' : 'translateY(0)', transition: 'transform 0.55s cubic-bezier(0.22, 1, 0.36, 1)', willChange: 'transform' }}>
-                    <img src={searchIcon} alt="Scan" className="btn-icon" style={{ width: '16px', marginRight: '8px' }} />
-                    <span>{isLoading ? "Processing Data..." : "Scan Data"}</span>
-                  </button>
                 </div>
               </div>
 
               <div style={getSidebarPanelStyle('analytics')}>
-                {alarmStats.length > 0 ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-                      <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'var(--text-primary)' }}>Top Alarms</h3>
-                      <button ref={expandBtnRef} onClick={openGraphModal} style={{ background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--color-info)', fontSize: '0.75rem', fontWeight: 'bold', cursor: 'pointer', padding: '5px 10px', borderRadius: '4px', outline: 'none' }}>Expand 📈</button>
-                    </div>
-                    <div className="custom-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto', overflowX: 'hidden', paddingRight: '5px' }}>
-                      {alarmStats.map((stat, i) => ( 
-                        <div key={i} style={{ width: '100%', background: 'var(--bg-primary)', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', boxSizing: 'border-box' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '6px', fontWeight: 'bold' }}>
-                            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', width: '80%', color: 'var(--text-primary)' }}>{stat.name}</span>
-                            <span style={{ color: 'var(--color-danger)' }}>{stat.count}</span>
+                <div style={sidebarInnerCardStyle}>
+                  {alarmStats.length > 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+                        <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'var(--text-primary)' }}>Top Alarms</h3>
+                        <button ref={expandBtnRef} onClick={openGraphModal} style={{ background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--color-info)', fontSize: '0.75rem', fontWeight: 'bold', cursor: 'pointer', padding: '5px 10px', borderRadius: '4px', outline: 'none' }}>Expand 📈</button>
+                      </div>
+                      <div className="custom-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto', overflowX: 'hidden', paddingRight: '5px' }}>
+                        {alarmStats.map((stat, i) => ( 
+                          <div key={i} style={{ width: '100%', background: 'var(--bg-primary)', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', boxSizing: 'border-box' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '6px', fontWeight: 'bold' }}>
+                              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', width: '80%', color: 'var(--text-primary)' }}>{stat.name}</span>
+                              <span style={{ color: 'var(--color-danger)' }}>{stat.count}</span>
+                            </div>
+                            <div style={{ width: '100%', height: '6px', background: 'var(--bg-input)', borderRadius: '3px', overflow: 'hidden' }}>
+                              <div style={{ height: '100%', width: `${stat.percentage}%`, background: 'var(--brand-gradient)', borderRadius: '3px', transition: 'width 1s ease-out' }}></div>
+                            </div>
                           </div>
-                          <div style={{ width: '100%', height: '6px', background: 'var(--bg-input)', borderRadius: '3px', overflow: 'hidden' }}>
-                            <div style={{ height: '100%', width: `${stat.percentage}%`, background: 'var(--brand-gradient)', borderRadius: '3px', transition: 'width 1s ease-out' }}></div>
-                          </div>
-                        </div>
-                      ))}
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: 'var(--text-secondary)' }}>No analytics data to show.</div>
-                )}
+                  ) : (
+                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: 'var(--text-secondary)' }}>No analytics data to show.</div>
+                  )}
+                </div>
               </div>
 
               <div style={getSidebarPanelStyle('details')}>
-                {selectedRowDetails ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                    <h3 style={{ margin: 0, marginBottom: '20px', fontSize: '1.1rem', color: 'var(--text-primary)' }}>Alert Breakdown</h3>
-                    <div className="details-content custom-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                      <div style={{ background: 'var(--bg-primary)', padding: '15px', borderRadius: '8px', border: '1px solid var(--border-light)', borderLeft: '4px solid var(--color-danger)' }}>
-                        <span className="input-label" style={{ fontSize: '0.75rem' }}>Alert Count</span>
-                        <div style={{ fontSize: '1.8rem', fontWeight: 'bold', color: 'var(--color-danger)', marginTop: '5px' }}>{selectedRowDetails.count} <span style={{fontSize: '0.9rem', color: 'var(--text-secondary)'}}>Repetitions</span></div>
-                      </div>
-                      <div style={{ background: 'var(--bg-primary)', padding: '15px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
-                        <span className="input-label" style={{ fontSize: '0.75rem' }}>{dashboardMode === 'wireless' ? 'PLA_ID' : 'SEVERITY'}</span>
-                        <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: 'var(--text-primary)', marginTop: '5px' }}>
-                          {selectedRowDetails.pla}
+                <div style={sidebarInnerCardStyle}>
+                  {selectedRowDetails ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                      <h3 style={{ margin: 0, marginBottom: '20px', fontSize: '1.1rem', color: 'var(--text-primary)' }}>Alert Breakdown</h3>
+                      <div className="details-content custom-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                        <div style={{ background: 'var(--bg-primary)', padding: '15px', borderRadius: '8px', border: '1px solid var(--border-light)', borderLeft: '4px solid var(--color-danger)' }}>
+                          <span className="input-label" style={{ fontSize: '0.75rem' }}>Alert Count</span>
+                          <div style={{ fontSize: '1.8rem', fontWeight: 'bold', color: 'var(--color-danger)', marginTop: '5px' }}>{selectedRowDetails.count} <span style={{fontSize: '0.9rem', color: 'var(--text-secondary)'}}>Repetitions</span></div>
                         </div>
-                      </div>
-                      <div style={{ background: 'var(--bg-primary)', padding: '15px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
-                        <span className="input-label" style={{ fontSize: '0.75rem' }}>Site Name</span>
-                        <div style={{ fontWeight: 'bold', marginTop: '5px', wordBreak: 'break-word', color: 'var(--color-info)', fontSize: '1rem' }}>
-                          {selectedRowDetails.name}
+                        <div style={{ background: 'var(--bg-primary)', padding: '15px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
+                          <span className="input-label" style={{ fontSize: '0.75rem' }}>{dashboardMode === 'wireless' ? 'PLA_ID' : 'SEVERITY'}</span>
+                          <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: 'var(--text-primary)', marginTop: '5px' }}>
+                            {selectedRowDetails.pla}
+                          </div>
                         </div>
-                      </div>
-                      <div style={{ background: 'var(--bg-primary)', padding: '15px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
-                        <span className="input-label" style={{ fontSize: '0.75rem' }}>Alarm Text</span>
-                        <div style={{ fontWeight: 'bold', marginTop: '5px', wordBreak: 'break-word', color: 'var(--text-primary)', fontSize: '0.95rem' }}>
-                          {selectedRowDetails.alert}
+                        <div style={{ background: 'var(--bg-primary)', padding: '15px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
+                          <span className="input-label" style={{ fontSize: '0.75rem' }}>Site Name</span>
+                          <div style={{ fontWeight: 'bold', marginTop: '5px', wordBreak: 'break-word', color: 'var(--color-info)', fontSize: '1rem' }}>
+                            {selectedRowDetails.name}
+                          </div>
                         </div>
-                      </div>
-                      <div style={{ background: 'var(--bg-primary)', padding: '15px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
-                        <span className="input-label" style={{ fontSize: '0.75rem' }}>{dashboardMode === 'wireless' ? 'Distinguished Name' : 'Location Info'}</span>
-                        <div style={{ fontFamily: 'monospace', marginTop: '5px', wordBreak: 'break-all', fontSize: '0.8rem', color: 'var(--text-secondary)', background: 'var(--bg-input)', padding: '8px', borderRadius: '4px' }}>
-                          {selectedRowDetails.dn}
+                        <div style={{ background: 'var(--bg-primary)', padding: '15px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
+                          <span className="input-label" style={{ fontSize: '0.75rem' }}>Alarm Text</span>
+                          <div style={{ fontWeight: 'bold', marginTop: '5px', wordBreak: 'break-word', color: 'var(--text-primary)', fontSize: '0.95rem' }}>
+                            {selectedRowDetails.alert}
+                          </div>
+                        </div>
+                        <div style={{ background: 'var(--bg-primary)', padding: '15px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
+                          <span className="input-label" style={{ fontSize: '0.75rem' }}>{dashboardMode === 'wireless' ? 'Distinguished Name' : 'Location Info'}</span>
+                          <div style={{ fontFamily: 'monospace', marginTop: '5px', wordBreak: 'break-all', fontSize: '0.8rem', color: 'var(--text-secondary)', background: 'var(--bg-input)', padding: '8px', borderRadius: '4px' }}>
+                            {selectedRowDetails.dn}
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: 'var(--text-secondary)' }}>Select a row to see details.</div>
-                )}
+                  ) : (
+                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: 'var(--text-secondary)' }}>Select a row to see details.</div>
+                  )}
+                </div>
               </div>
 
               <div style={getSidebarPanelStyle('history')}>
-                <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                <div style={sidebarInnerCardStyle}>
+                  <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
                     <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'var(--text-primary)' }}>Data History</h3>
                     <button onClick={handleRefreshStoredData} style={{ background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--color-info)', fontSize: '0.75rem', fontWeight: 'bold', cursor: 'pointer', padding: '5px 10px', borderRadius: '4px', outline: 'none' }}>Refresh</button>
@@ -988,6 +1090,7 @@ const readCache = () => {
                     )}
                   </div>
                 </div>
+              </div>
               </div>
             </div>
         </aside>

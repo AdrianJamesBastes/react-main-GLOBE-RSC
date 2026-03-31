@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import useDarkMode from '../../hooks/useDarkMode';
 import useSearchDebounce from '../../hooks/useSearchDebounce';
 import AnalyticsDashboard from '../../Dashboard/AnalyticsDashboard';
@@ -149,7 +149,10 @@ export default function SMDashboard() {
 
   const applyStoredProcessedData = (item) => {
     if (!item) return;
-    setResults(item.processedData || []);
+    const safeProcessedData = Array.isArray(item.processedData)
+      ? item.processedData.filter((row) => row && typeof row === 'object')
+      : [];
+    setResults(safeProcessedData);
     setFilterStatus('ALL');
     setSelectedRowDetails(null);
     setShowHistoryPanel(false);
@@ -169,7 +172,15 @@ export default function SMDashboard() {
 
       const writeCache = (payload) => {
         try {
-          localStorage.setItem(CACHE_KEY, JSON.stringify({ ...payload, timestamp: Date.now() }));
+          const cachePayload = { ...payload };
+          if (cachePayload.latestStoredData && Array.isArray(cachePayload.latestStoredData.processedData)) {
+            const slimProcessedData = cachePayload.latestStoredData.processedData.map((item) => {
+              const { rawRows, ...rest } = item || {};
+              return rest;
+            });
+            cachePayload.latestStoredData = { ...cachePayload.latestStoredData, processedData: slimProcessedData };
+          }
+          localStorage.setItem(CACHE_KEY, JSON.stringify({ ...cachePayload, timestamp: Date.now() }));
         } catch (error) {
           console.warn("⚠️ SM Cache Write Failed (Likely Exceeded 5MB limit):", error);
           // Failsafe: Clear the bloated cache so it doesn't corrupt the app on next load
@@ -364,73 +375,14 @@ export default function SMDashboard() {
     }
   };
 
-  const handleSpecificExport = async (exportCategory) => {
+  const handleSpecificExport = (exportCategory) => {
     setShowExportMenu(false);
-    if (results.length === 0) return alert("No data to export.");
-
-    const XLSX = await import('xlsx');
-
-    const dataToExport = exportCategory === 'ALL' 
-      ? results.filter(row => row.matchStatus !== 'REMOVED') 
-      : results.filter(row => row.matchStatus === exportCategory);
-
-    if (dataToExport.length === 0) return alert(`There are no "${exportCategory}" sites to export.`);
-
-    const exportStatusOrder = ['NEW', 'MISMATCH', 'REMOVED', 'UNCHANGED'];
-    
-    dataToExport.sort((a, b) => {
-      const orderA = exportStatusOrder.indexOf(a.matchStatus);
-      const orderB = exportStatusOrder.indexOf(b.matchStatus);
-      if (orderA !== orderB) return orderA - orderB;
-
-      const baseA = a.baseLocation || "";
-      const baseB = b.baseLocation || "";
-      return baseA.localeCompare(baseB, undefined, { numeric: true, sensitivity: 'base' });
-    });
-
-    const excelData = dataToExport.map(row => {
-      const geo = parseLocationData(row.baseLocation);
-      
-      let reg = getShortRegionByProvince(row.prov);
-      if (!reg && geo.province) reg = getShortRegionByProvince(geo.province);
-      if (!reg && row.mCity) {
-        const cleanCity = String(row.mCity).toUpperCase().trim();
-        const fallbackProv = cityToProvinceMap[cleanCity];
-        if (fallbackProv) reg = getShortRegionByProvince(fallbackProv);
-      }
-
-      return {
-        "Region": "MIN",
-        "PLA ID": row.plaId === "NEW_SITE" ? "" : (row.plaId || ""),
-        "PLA Status": "",
-        "Area": row.sArea || "",
-        "Region ": (row.region || geo.region || reg) || "",
-        "Province": (row.prov || geo.province) || "",
-        "Municipality": (row.mCity || geo.city) || "",
-        "Barangay": "",
-        "Site Address": row.sAdd || "",
-        "Longitude": row.lng || "",
-        "Latitude": row.lat || "",
-        "Technology": row.techGen || "UDM Only",            
-        "Tech Name/ BTS": row.nmsName || row.techName, 
-        "Tech Description": "",
-        "Tech Status": "",
-        "Site Owner": row.twrC || geo.siteCode || "GLOBE TELECOM",
-        "Territory": row.trt || "",
-        "Hiroshima Severity": row.hSvr || "",
-        "Remarks": row.remarks || "",
-        "Remarks Status": row.matchStatus || ""
-      };
-    });
-
-    const worksheet = XLSX.utils.json_to_sheet(excelData);
-    const headers = Object.keys(excelData[0]);
-    
-    const columnWidths = headers.map(header => {
-      let maxLength = header.length; 
-      excelData.forEach(row => {
-        const cellValue = row[header] ? row[header].toString() : "";
-        if (cellValue.length > maxLength) maxLength = cellValue.length;
+    if (results.length === 0) {
+      return showThemeModal({
+        title: 'No Data',
+        message: 'No data available to export.',
+        type: 'warning',
+        confirmText: 'OK'
       });
     }
 
@@ -446,7 +398,7 @@ export default function SMDashboard() {
     }
   };
 
- const handleScan = async () => {
+  const handleScan = async () => {
     if (!monitorFile1 || !monitorFile2) {
       return showThemeModal({
         title: 'Missing CSV Files',
@@ -469,49 +421,105 @@ export default function SMDashboard() {
 
     try {
       const data = await scanFiles(monitorFile1, monitorFile2);
-      setResults(data);
+      const safeData = Array.isArray(data) ? data.filter((row) => row && typeof row === 'object') : [];
+      setResults(safeData);
 
-      const sendInChunks = (file1, file2) => {
-        return new Promise((resolve, reject) => {
-          if (window.google && window.google.script) {
-             window.google.script.run
-               .withSuccessHandler((resRaw) => {
-                 const res = JSON.parse(resRaw);
-                 if (res.success) resolve(res.data);
-                 else reject(res.error);
-               })
-               .withFailureHandler(reject)
-               .processCSVComparison(file1, file2);
-          } else {
-             setTimeout(() => {
-               const mockData = [];
-               const statuses = ["NEW", "MISMATCH", "UNCHANGED", "REMOVED"];
-               for(let i=1; i<=50; i++) {
-                 mockData.push({ 
-                   plaId: `MIN_${String(i).padStart(4, '0')}`, 
-                   matchStatus: statuses[(i-1) % statuses.length], 
-                   techName: `SITENAME${i}DDN`, 
-                   baseLocation: `SITENAME${i}DDN`,
-                   techGen: "4G-FDD",
-                   nmsName: `SITENAME${i}DDNLYK`,
-                   remarks: "Mock data generated.",
-                   lat: (7.0 + (Math.random() * 0.5)).toFixed(5), 
-                   lng: (125.4 + (Math.random() * 0.5)).toFixed(5),
-                   sArea: "N/A", prov: "UNKNOWN", mCity: "UNKNOWN", sAdd: "N/A", trt: "N/A", hSvr: "N/A", twrC: "N/A"
-                 });
-               }
-               resolve(mockData);
-             }, 1000);
-          }
+      const fileNames = `${monitorFile1.name} + ${monitorFile2.name}`;
+      
+      storeUploadedData(
+        fileNames,
+        'storm-masterlist',
+        [],
+        safeData,
+        {
+          totalRecords: safeData.length,
+          processedRecords: safeData.length,
+          dashboardMode: 'storm-masterlist',
+          timestamp: new Date().toISOString(),
+          engineerName: engineerName 
+        }
+      )
+        .then(async () => {
+          const [updatedStoredData, lastModified] = await Promise.all([
+            getUserUploadedDataSummary(10, 'storm-masterlist'),
+            getLastModifiedInfo('storm-masterlist')
+          ]);
+          setStoredData(updatedStoredData);
+          setLastModifiedInfo(lastModified);
+          writeCache({
+            userInfo,
+            storedData: updatedStoredData,
+            lastModifiedInfo: lastModified,
+            latestStoredData: {
+              processedData: safeData,
+              fileName: fileNames
+            }
+          });
+        })
+        .catch((storeError) => {
+          console.error('Failed to store data:', storeError);
+          showThemeModal({
+            title: 'Save Warning',
+            message: 'Data was processed successfully but failed to save to the database. You can still view the results.',
+            type: 'warning',
+            confirmText: 'OK'
+          });
         });
-      };
-
-      const data = await sendInChunks(text1, text2);
-      setResults(data);
-      setIsLoading(false);
     } catch (error) {
-      alert("Error: " + error);
-      setIsLoading(false);
+      showThemeModal({
+        title: 'Scan Error',
+        message: "Error: " + (error.message || error),
+        type: 'error',
+        confirmText: 'OK'
+      });
+    }
+  };
+
+  const handleRefreshStoredData = async () => {
+    try {
+      const [updatedStoredData, lastModified] = await Promise.all([
+        getUserUploadedDataSummary(10, 'storm-masterlist'),
+        getLastModifiedInfo('storm-masterlist')
+      ]);
+      setStoredData(updatedStoredData);
+      setLastModifiedInfo(lastModified);
+      writeCache({
+        userInfo,
+        storedData: updatedStoredData,
+        lastModifiedInfo: lastModified
+      });
+    } catch (error) {
+      console.error('Failed to refresh stored data:', error);
+    }
+  };
+
+  const handleLoadStoredData = async (item) => {
+    try {
+      setIsStoredDataLoading(true);
+      const fullItem = await getUploadedDataById(item.id);
+      applyStoredProcessedData(fullItem);
+      writeCache({
+        userInfo,
+        storedData,
+        lastModifiedInfo,
+        latestStoredData: fullItem
+      });
+      showThemeModal({
+        title: 'Data Loaded',
+        message: `Loaded data from: ${fullItem.fileName}\n${fullItem.processedData?.length || 0} results loaded.`,
+        type: 'info',
+        confirmText: 'OK'
+      });
+    } catch (error) {
+      console.error('Failed to load stored data:', error);
+      showThemeModal({
+        title: 'Load Failed',
+        message: 'Failed to load stored data.',
+        type: 'error',
+        confirmText: 'OK'
+      });
+    } finally {
+      setIsStoredDataLoading(false);
     }
   };
 
