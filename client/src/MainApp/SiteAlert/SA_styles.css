@@ -209,7 +209,6 @@ body.dark-mode .btn {
 .drill-down-badge {
   display: inline-flex; 
   align-items: center; 
-  justifyContent: center; 
   padding: 6px 16px; 
   border-radius: 99px; 
   background-color: var(--badge-danger-bg); 
@@ -348,4 +347,27 @@ body.dark-mode .drill-down-badge:hover {
   color: white;
 }
 
+/* --- USER PROFILE TRIGGER OVERRIDES --- */
+.user-profile-trigger {
+  -webkit-tap-highlight-color: transparent;
+}
 
+.user-profile-trigger:hover {
+  background: var(--bg-hover) !important;
+}
+
+.user-profile-trigger:focus,
+.user-profile-trigger:active,
+.user-profile-trigger:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+  border: none !important;
+}
+
+/* Re-use export-menu glassmorphism for user history */
+.user-history-menu button {
+  border-bottom: 1px solid var(--border-light) !important;
+}
+.user-history-menu button:last-child {
+  border-bottom: none !important;
+}

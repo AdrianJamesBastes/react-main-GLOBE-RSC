@@ -62,6 +62,7 @@ export default function SADashboard() {
   const [graphModalOrigin, setGraphModalOrigin] = useState('0% 0%');                 
   const [selectedGraphAlarm, setSelectedGraphAlarm] = useState(null);
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [showUserDropdown, setShowUserDropdown] = useState(false);
 
   const [themeModal, setThemeModal] = useState({
     visible: false,
@@ -94,40 +95,6 @@ export default function SADashboard() {
   const handleThemeModalCancel = () => {
     themeModal.onCancel?.();
     closeThemeModal();
-  };
-
-  const askForEngineerName = () => {
-    showThemeModal({
-      title: 'Audit Log Required',
-      message: 'Please enter your name to push this process to the database.',
-      type: 'warning',
-      input: true,
-      inputValue: '',
-      confirmText: 'Continue',
-      cancelText: 'Cancel',
-      onConfirm: (value) => {
-        const trimmed = (value || '').trim();
-        if (!trimmed) {
-          showThemeModal({
-            title: 'Name Required',
-            message: 'Scan cancelled: a name is required to maintain the audit log.',
-            type: 'warning',
-            confirmText: 'OK'
-          });
-          return;
-        }
-        localStorage.setItem('globe_rsc_engineer', trimmed);
-        handleScan();
-      },
-      onCancel: () => {
-        showThemeModal({
-          title: 'Scan Cancelled',
-          message: 'A name is required to maintain the audit log.',
-          type: 'info',
-          confirmText: 'OK'
-        });
-      }
-    });
   };
 
   // Backend integration state
@@ -191,12 +158,14 @@ export default function SADashboard() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  useEffect(() => {
+useEffect(() => {
     let isMounted = true;
 
     const loadUserData = async () => {
+      // 1. INSTANT CACHE LOAD
       const cached = readCache();
       if (cached && isMounted) {
+        setUserInfo(cached.userInfo || null); // 🚀 ADDED: Load user from cache
         setStoredData(cached.storedData || []);
         setLastModifiedInfo(cached.lastModifiedInfo || null);
         if (cached.latestStoredData) {
@@ -207,13 +176,16 @@ export default function SADashboard() {
 
       try {
         setIsRefreshingSavedData(true);
-        const [storedDataList, latestStoredData, lastModified] = await Promise.all([
+        // 🚀 ADDED: Fetch getUserInfo() from Google Apps Script
+        const [userData, storedDataList, latestStoredData, lastModified] = await Promise.all([
+          getUserInfo(), 
           getUserUploadedDataSummary(10, dashboardMode),
           getLatestUserUploadedData(dashboardMode),
           getLastModifiedInfo(dashboardMode)
         ]);
         
         if (isMounted) {
+          setUserInfo(userData); // 🚀 ADDED: Set the React state with your Google Identity
           setStoredData(storedDataList);
           setLastModifiedInfo(lastModified);
           if (latestStoredData) {
@@ -221,6 +193,7 @@ export default function SADashboard() {
           }
           
           writeCache({
+            userInfo: userData, // 🚀 ADDED: Save user to cache for seamless switching
             storedData: storedDataList,
             lastModifiedInfo: lastModified,
             latestStoredData: latestStoredData || null
@@ -385,10 +358,7 @@ export default function SADashboard() {
       });
     }
 
-    let engineerName = localStorage.getItem('globe_rsc_engineer');
-    if (!engineerName) {
-      return askForEngineerName();
-    }
+    const engineerName = userInfo?.displayName || userInfo?.name || "Workspace User";
 
     setIsLoading(true);
     setResults([]);
@@ -558,6 +528,20 @@ export default function SADashboard() {
     XLSX.writeFile(workbook, `${dashboardMode.toUpperCase()}_SiteAlerts_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
+  const handleSpecificExport = (exportCategory = 'ALL') => {
+    setShowExportMenu(false);
+    if (exportCategory === 'ALL') {
+      handleExport();
+      return;
+    }
+    showThemeModal({
+      title: 'Unsupported Export',
+      message: `Export category "${exportCategory}" is not available for Site Alert.`,
+      type: 'warning',
+      confirmText: 'OK'
+    });
+  };
+
   const handleLoadStoredData = async (storedDataItem) => {
     try {
       setIsLoading(true);
@@ -704,7 +688,17 @@ export default function SADashboard() {
 
   const VirtualizedRow = ({ index, style }) => {
     const row = filteredResults[index];
-    let rowStyle = { ...style, display: 'flex', alignItems: 'center', padding: '0 20px', cursor: "pointer", transition: "background-color 0.2s", borderBottom: "1px solid rgba(128,128,128,0.1)", boxSizing: 'border-box', fontSize: '0.85rem' };
+    let rowStyle = {
+      ...style,
+      display: 'flex',
+      alignItems: 'center',
+      padding: '0 20px',
+      cursor: "pointer",
+      transition: "background-color 0.2s",
+      borderBottom: isDarkMode ? "1px solid rgba(255,255,255,0.08)" : "1px solid rgba(15, 23, 42, 0.16)",
+      boxSizing: 'border-box',
+      fontSize: '0.85rem'
+    };
     const columnStyle = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', paddingRight: '15px', boxSizing: 'border-box' };
 
     return (
@@ -801,18 +795,27 @@ export default function SADashboard() {
     return null;
   };
 
+  // 🚀 1. ALL VARIABLES MUST BE DEFINED FIRST
   const currentUserName = userInfo?.displayName || userInfo?.name || "Unknown User";
-  const engineerName = localStorage.getItem('globe_rsc_engineer') || currentUserName || "Workspace User";
+  const currentUserEmail = userInfo?.userId || "user@globe.com.ph"; 
+  const myProcessedData = storedData ? storedData.filter(item => item.userId === currentUserEmail) : [];
+  
+  const engineerName = currentUserName || "Workspace User";
   const userInitial = engineerName.charAt(0).toUpperCase();
+  const firstName = (engineerName.split(' ')[0] || '').toUpperCase();
+
   const lastModifiedName = lastModifiedInfo?.userDisplayName || lastModifiedInfo?.userName || "";
   const lastModifiedTimestamp = lastModifiedInfo?.timestamp
     ? new Date(lastModifiedInfo.timestamp).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
     : "No previous sync";
 
+  // 🚀 2. HEADER ACTIONS CREATED SECOND (Now it can safely read the variables above!)
   const headerActions = (
     <div className="header-actions" style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', paddingLeft: '16px' }}>
       <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', minWidth: 0, maxWidth: '280px' }}>
-        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', lineHeight: 1.2 }}>Last Modified:</span>
+        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', lineHeight: 1.2 }}>
+          Last Modified:
+        </span>
         <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {lastModifiedName ? `${lastModifiedTimestamp} | ${lastModifiedName}` : lastModifiedTimestamp}
         </span>
@@ -822,22 +825,22 @@ export default function SADashboard() {
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
         <div className="export-dropdown-container" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setShowExportMenu(false); }} tabIndex={-1} style={{ position: 'relative' }}>
-          <button className="btn theme-toggle" onClick={() => setShowExportMenu(!showExportMenu)} disabled={results.length === 0} style={{
+          <button className="btn theme-toggle" onClick={() => setShowExportMenu(!showExportMenu)} disabled={results?.length === 0} style={{
             width: '36px', height: '36px', borderRadius: '50%', padding: 0,
             background: 'var(--bg-input)', border: '1px solid var(--border-light)',
             color: 'var(--text-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            cursor: results.length === 0 ? 'not-allowed' : 'pointer',
-            opacity: results.length === 0 ? 0.5 : 1, transition: 'all 0.2s ease', outline: 'none'
+            cursor: results?.length === 0 ? 'not-allowed' : 'pointer',
+            opacity: results?.length === 0 ? 0.5 : 1, transition: 'all 0.2s ease', outline: 'none'
           }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 4v10" />
-              <polyline points="8 10 12 14 16 10" />
+              <path d="M12 5v9" />
+              <polyline points="8 11 12 15 16 11" />
               <path d="M6 18h12" />
             </svg>
           </button>
           {showExportMenu && (
             <div className="export-menu" style={{ position: 'absolute', top: '110%', left: 0, zIndex: 50 }}>
-              <button onClick={() => { setShowExportMenu(false); handleExport(); }}>Export Raw Data</button>
+              <button onClick={() => handleSpecificExport('ALL')}>Full Export</button>
             </div>
           )}
         </div>
@@ -848,31 +851,151 @@ export default function SADashboard() {
           cursor: 'pointer', transition: 'all 0.2s ease', outline: 'none'
         }}>
           {isDarkMode ? (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line>
-              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
-              <line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line>
-              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
-            </svg>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
           ) : (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
-            </svg>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
           )}
         </button>
+        
         <div style={{ width: '1px', height: '24px', background: 'rgba(128, 128, 128, 0.4)' }} />
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <div title={engineerName} style={{
-            width: '36px', height: '36px', borderRadius: '50%',
-            background: 'linear-gradient(135deg, var(--brand-purple), #6b21a8)',
-            color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontWeight: 'bold', fontSize: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
-          }}>
-            {userInitial}
-          </div>
-          <div style={{ textAlign: 'right', lineHeight: '1.2', minWidth: 0 }}>
-            <div style={{ fontWeight: '700', fontSize: '0.82rem', color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '130px' }}>{engineerName}</div>
-          </div>
+        
+        {/* 🚀 THE GOOGLE-STYLE PROFILE DROPDOWN */}
+        <div style={{ position: 'relative' }}>
+          
+          {/* TRIGGER BUTTON */}
+          <button 
+            className="user-profile-trigger"
+            onClick={() => setShowUserDropdown(!showUserDropdown)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '10px', background: 'transparent',
+              border: 'none', outline: 'none', cursor: 'pointer', textAlign: 'left', 
+              padding: '4px 8px', borderRadius: '8px', transition: 'background 0.2s'
+            }}
+          >
+            <div title={engineerName} style={{
+              width: '38px', height: '38px', borderRadius: '50%',
+              background: 'linear-gradient(135deg, var(--brand-purple), #6b21a8)',
+              color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontWeight: 'bold', fontSize: '1.1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
+            }}>
+              {userInitial}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', lineHeight: '1.2', minWidth: 0 }}>
+              <span style={{ fontWeight: '700', fontSize: '0.85rem', color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '150px' }}>
+                {engineerName}
+              </span>
+              <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '150px' }}>
+                {currentUserEmail}
+              </span>
+            </div>
+          </button>
+
+          {/* THE THEMED DROPDOWN MENU */}
+          {showUserDropdown && (
+            <>
+              {/* Invisible Overlay for closing */}
+              <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999 }} onClick={(e) => { e.stopPropagation(); setShowUserDropdown(false); }} />
+
+              <div style={{ 
+                position: 'absolute', top: '110%', right: 0, zIndex: 1000, width: '360px', 
+                background: 'var(--bg-card)', 
+                backdropFilter: 'var(--glass-blur)',
+                WebkitBackdropFilter: 'var(--glass-blur)',
+                border: '1px solid var(--border-light)', 
+                borderRadius: '24px', boxShadow: 'var(--shadow-hover)', 
+                padding: '16px', color: 'var(--text-primary)', fontFamily: '"Google Sans", Roboto, Arial, sans-serif'
+              }}>
+                
+                {/* Header Row */}
+                <div style={{ position: 'relative', textAlign: 'center', marginBottom: '16px' }}>
+                  <div style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: '500' }}>{currentUserEmail}</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>Managed by Globe RSC</div>
+                  <button onClick={() => setShowUserDropdown(false)} style={{ position: 'absolute', right: '0', top: '-4px', background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.2rem', outline: 'none' }}>✕</button>
+                </div>
+
+                {/* Big Avatar with Camera Icon */}
+                <div style={{ position: 'relative', width: '76px', height: '76px', margin: '0 auto 12px auto' }}>
+                  <div style={{ 
+                    width: '100%', height: '100%', borderRadius: '50%', background: 'linear-gradient(135deg, var(--brand-purple), #6b21a8)', 
+                    color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '2rem',
+                    boxShadow: '0 4px 10px rgba(0,0,0,0.2)'
+                  }}>
+                    {userInitial}
+                  </div>
+                  {/* Camera Badge Overlay */}
+                  <div style={{ 
+                    position: 'absolute', bottom: '0', right: '0', background: 'var(--bg-input)', borderRadius: '50%', 
+                    width: '24px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid var(--bg-card)' 
+                  }}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--text-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+                  </div>
+                </div>
+
+                {/* Greeting & Manage Button */}
+                <div style={{ textAlign: 'center', fontSize: '1.4rem', marginBottom: '16px', color: 'var(--text-primary)' }}>Hi, {firstName}!</div>
+                <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '24px' }}>
+                 <button 
+                    onClick={() => {
+                      setShowUserDropdown(false);
+                      // Opens the actual Google Workspace account manager in a new tab
+                      window.open('https://myaccount.google.com/', '_blank'); 
+                    }}
+                    className="primary-outline" 
+                    style={{ borderRadius: '100px', padding: '8px 24px', fontSize: '0.85rem', fontWeight: '500', cursor: 'pointer', transition: 'all 0.2s' }}
+                  >
+                    Manage your Google Account
+                  </button>
+                </div>
+
+                <div className="custom-scrollbar" style={{ maxHeight: '220px', overflowY: 'auto' }}>
+                      {/* 🚀 NOW USING YOUR PERSONAL FILTERED DATA */}
+                      {myProcessedData.length > 0 ? myProcessedData.slice(0, 5).map((item, index) => (
+                        <button 
+                          key={item.id} 
+                          onClick={() => { handleLoadStoredData(item); setShowUserDropdown(false); }} 
+                          className="row-hover"
+                          style={{ 
+                            width: '100%', background: 'transparent', border: 'none', borderBottom: index === Math.min(myProcessedData.length, 5) - 1 ? 'none' : '1px solid var(--border-light)',
+                            padding: '14px 16px', display: 'flex', alignItems: 'center', gap: '16px', cursor: 'pointer', textAlign: 'left', transition: 'background 0.2s' 
+                          }}
+                        >
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                          
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.fileName}</div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>{new Date(item.uploadDate).toLocaleDateString()} • <span style={{ color: 'var(--color-info)' }}>{item.processedCount ?? item.metadata?.processedRecords ?? 0} rows</span></div>
+                          </div>
+                        </button>
+                      )) : (
+                        <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                          You haven't processed any files recently.
+                        </div>
+                      )}
+                    </div>
+
+                {/* Footer Links */}
+                <div style={{ textAlign: 'center', marginTop: '16px', padding: '12px 0 4px 0', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                  <a
+                    href="https://policies.google.com/privacy?hl=en"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: 'var(--text-secondary)', textDecoration: 'none' }}
+                  >
+                    Privacy Policy
+                  </a>
+                  &nbsp;•&nbsp;
+                  <a
+                    href="https://policies.google.com/terms?hl=en"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: 'var(--text-secondary)', textDecoration: 'none' }}
+                  >
+                    Terms of Service
+                  </a>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -1136,7 +1259,7 @@ export default function SADashboard() {
 
             <div className="output-box" style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
               <div className="table-wrapper" style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                <div style={{ display: 'flex', padding: '12px 35px 12px 20px', fontWeight: 'bold', borderBottom: '2px solid var(--border-color)', backgroundColor: 'var(--btn-scan-bg)', textTransform: 'uppercase', fontSize: '0.8rem', color: 'var(--text-inverse)' }}>
+                <div style={{ display: 'flex', padding: '12px 35px 12px 20px', fontWeight: 'bold', borderBottom: isDarkMode ? '2px solid var(--border-color)' : '2px solid rgba(15, 23, 42, 0.18)', backgroundColor: 'var(--btn-scan-bg)', textTransform: 'uppercase', fontSize: '0.8rem', color: 'var(--text-inverse)' }}>
                   <div style={{ width: '12%', paddingRight: '15px' }}>{dashboardMode === 'wireless' ? 'PLA_ID' : 'SEVERITY'}</div>
                   <div style={{ width: '23%', paddingRight: '15px', color: 'var(--text-inverse)' }}>Site Name</div>
                   <div style={{ width: '20%', paddingRight: '15px' }}>Alarm Text</div>

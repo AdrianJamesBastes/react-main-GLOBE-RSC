@@ -3,7 +3,9 @@ import { MapContainer, TileLayer, WMSTileLayer, Marker, Popup, Tooltip, useMap }
 import MarkerClusterGroup from 'react-leaflet-cluster';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
+import globeIcon from '../assets/globeIcon.png';
 
+// Fix default marker icons
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
@@ -11,47 +13,213 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
+// 🔥 CUSTOM MARKER ICON (with STATUS stored)
 const getCustomIcon = (status, isSelected, duplicateCount = 1) => {
   let bgColor = '#5e5e5d'; 
   if (status === 'NEW') bgColor = '#28a745'; 
   if (status === 'REMOVED') bgColor = '#dc3545'; 
   if (status === 'MISMATCH') bgColor = '#d97706'; 
 
-  const size = isSelected ? 20 : 14;
-  const anchor = isSelected ? 10 : 7;
-  const border = isSelected ? '3px solid #ffffff' : '2px solid white';
-  const shadow = isSelected 
-    ? '0 0 0 4px rgba(0, 31, 95, 0.4), 0 4px 8px rgba(0,0,0,0.5)'
-    : '0 2px 4px rgba(0,0,0,0.3)'; 
-
-  const badgeHtml = duplicateCount > 1 
-    ? `<div style="position: absolute; top: -6px; right: -6px; background-color: #dc3545; color: white; width: 16px; height: 16px; border-radius: 50%; font-size: 0.65rem; font-weight: bold; display: flex; justify-content: center; align-items: center; border: 1px solid white; box-shadow: 0 1px 3px rgba(0,0,0,0.4); z-index: 10;">${duplicateCount}</div>`
-    : '';
+  const size = isSelected ? 26 : 20;
+  const anchor = Math.round(size / 2);
+  const ringSize = isSelected ? 3 : 2.5;
+  const innerSize = Math.max(size - (ringSize * 2), 8);
 
   return L.divIcon({
     className: 'custom-marker',
-    html: `<div style="position: relative; background-color: ${bgColor}; width: ${size}px; height: ${size}px; border-radius: 50%; border: ${border}; box-shadow: ${shadow}; transition: all 0.3s ease;">
-             ${badgeHtml}
-           </div>`,
+
+    // 👇 IMPORTANT: store status here
+    status: status,
+
+    html: `
+      <div style="
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: ${size}px;
+        height: ${size}px;
+        border-radius: 50%;
+        border: ${ringSize}px solid ${bgColor};
+        box-sizing: border-box;
+        overflow: hidden;
+        background: #ffffff;
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.95);
+      ">
+        <img
+          src="${globeIcon}"
+          alt="site marker"
+          style="
+            width: ${innerSize}px;
+            height: ${innerSize}px;
+            border-radius: 50%;
+            object-fit: cover;
+            display: block;
+            pointer-events: none;
+            user-select: none;
+          "
+        />
+      </div>
+    `,
     iconSize: [size, size],
-    iconAnchor: [anchor, anchor] 
+    iconAnchor: [anchor, anchor]
   });
 };
 
+// 🔥 FINAL CLUSTER ICON (pulse + status ring)
 const createCustomClusterIcon = (cluster) => {
+  const markers = cluster.getAllChildMarkers();
+  const count = cluster.getChildCount();
+  const size = Math.min(30, 20 + Math.log(count + 1) * 4.5);
+  const labelFontSize = Math.max(10, Math.min(13, size * 0.5));
+  const shouldPulse = count > 10;
+  const shellSize = size + 8;
+  const wrapperSize = shellSize + 14;
+  const badgeShift = Math.round(shellSize * 0.36);
+  const shellOffset = Math.round((wrapperSize - shellSize) / 2);
+
+  const statusCount = {
+    NEW: 0,
+    REMOVED: 0,
+    MISMATCH: 0,
+    OTHER: 0
+  };
+
+  markers.forEach((m) => {
+    const status = m.options.icon?.options?.status || 'OTHER';
+    if (statusCount[status] !== undefined) {
+      statusCount[status]++;
+    } else {
+      statusCount.OTHER++;
+    }
+  });
+
+  const dominantStatus = Object.entries(statusCount).reduce(
+    (max, entry) => (entry[1] > max[1] ? entry : max),
+    ['OTHER', statusCount.OTHER]
+  )[0];
+
+  const shellPalette = {
+    NEW: ['#9de4b2', '#4cb873', '#1f7a44'],
+    REMOVED: ['#f3a2a2', '#de6060', '#a92a2a'],
+    MISMATCH: ['#ffd097', '#f39c3c', '#bf6d12'],
+    OTHER: ['#b9e3ff', '#7dbbff', '#3f86d6']
+  };
+
+  const pulseColor = {
+    NEW: 'rgba(31, 122, 68, 0.28)',
+    REMOVED: 'rgba(169, 42, 42, 0.30)',
+    MISMATCH: 'rgba(191, 109, 18, 0.30)',
+    OTHER: 'rgba(0, 61, 145, 0.28)'
+  };
+
+  const [outerShell, middleShell, innerShell] = shellPalette[dominantStatus] || shellPalette.OTHER;
+  const pulseTint = pulseColor[dominantStatus] || pulseColor.OTHER;
+
   return L.divIcon({
-    html: `<div style="background-color: #001f5f; color: white; width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 0.9rem; border: 2px solid white; box-shadow: 0 4px 10px rgba(0,0,0,0.3);">
-             ${cluster.getChildCount()}
-           </div>`,
+    html: `
+      <div style="
+        position: relative;
+        width: ${wrapperSize}px;
+        height: ${wrapperSize}px;
+      ">
+        ${shouldPulse ? `
+          <span class="cluster-pulse" style="
+            width: ${shellSize + 6}px;
+            height: ${shellSize + 6}px;
+            left: ${Math.max(shellOffset - 3, 0)}px;
+            top: ${Math.max(shellOffset - 3, 0)}px;
+            background: ${pulseTint};
+          "></span>
+          <span class="cluster-pulse" style="
+            width: ${shellSize + 6}px;
+            height: ${shellSize + 6}px;
+            left: ${Math.max(shellOffset - 3, 0)}px;
+            top: ${Math.max(shellOffset - 3, 0)}px;
+            background: ${pulseTint};
+            animation-delay: 0.6s;
+          "></span>
+        ` : ''}
+        <div style="
+          position: absolute;
+          left: ${shellOffset}px;
+          top: ${shellOffset}px;
+          width: ${shellSize}px;
+          height: ${shellSize}px;
+          border-radius: 50%;
+          background: radial-gradient(circle at 32% 28%, rgba(255,255,255,0.65), rgba(255,255,255,0.08) 30%, rgba(0,0,0,0.08) 100%), ${outerShell};
+          padding: 2px;
+          box-sizing: border-box;
+          box-shadow:
+            0 0 0 1px rgba(255,255,255,0.9),
+            0 3px 10px rgba(0,0,0,0.26),
+            inset 0 -2px 5px rgba(0,0,0,0.18);
+        ">
+          <div style="
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            background: radial-gradient(circle at 35% 30%, rgba(255,255,255,0.45), rgba(255,255,255,0.05) 36%, rgba(0,0,0,0.08) 100%), ${middleShell};
+            padding: 2px;
+            box-sizing: border-box;
+            box-shadow: inset 0 1px 1px rgba(255,255,255,0.75), inset 0 -1px 2px rgba(0,0,0,0.2);
+          ">
+            <div style="
+              width: 100%;
+              height: 100%;
+              border-radius: 50%;
+              background: radial-gradient(circle at 34% 28%, rgba(255,255,255,0.4), rgba(255,255,255,0.04) 38%, rgba(0,0,0,0.1) 100%), ${innerShell};
+              padding: 1px;
+              box-sizing: border-box;
+              box-shadow: inset 0 1px 1px rgba(255,255,255,0.65), inset 0 -1px 2px rgba(0,0,0,0.22);
+            ">
+              <img
+                src="${globeIcon}"
+                alt="cluster marker"
+                style="
+                  width: 100%;
+                  height: 100%;
+                  border-radius: 50%;
+                  object-fit: cover;
+                  border: 1px solid rgba(255,255,255,0.95);
+                  background: #ffffff;
+                  display: block;
+                "
+              />
+            </div>
+          </div>
+        </div>
+        <span style="
+          position: absolute;
+          left: calc(50% + ${badgeShift}px);
+          top: calc(50% - ${badgeShift}px);
+          transform: translate(-50%, -50%);
+          background: linear-gradient(180deg, #2f4f86 0%, #1d3565 55%, #0f2246 100%);
+          color: white;
+          font-weight: 700;
+          font-size: ${labelFontSize}px;
+          line-height: 1;
+          padding: 3px 6px;
+          border-radius: 999px;
+          border: 1px solid rgba(255,255,255,0.95);
+          min-width: 20px;
+          text-align: center;
+          box-sizing: border-box;
+          box-shadow:
+            0 2px 6px rgba(0,0,0,0.3),
+            inset 0 1px 0 rgba(255,255,255,0.35);
+        ">${count}</span>
+      </div>
+    `,
     className: 'custom-cluster-marker',
-    iconSize: L.point(34, 34, true),
+    iconSize: L.point(wrapperSize, wrapperSize, true),
+    iconAnchor: [Math.round(wrapperSize / 2), Math.round(wrapperSize / 2)]
   });
 };
 
+// 🔁 Map recenter logic (unchanged)
 function MapRecenter({ expanded, filteredResults = [], selectedSite = {} }) {
   const map = useMap();
-  
-  // Memoize bounds to prevent fitBounds flooding
+
   const bounds = useMemo(() => {
     const pts = [];
     filteredResults.forEach(site => {
@@ -72,9 +240,9 @@ function MapRecenter({ expanded, filteredResults = [], selectedSite = {} }) {
   return null;
 }
 
+// 🔥 MAIN COMPONENT
 export default function MapVisualizer({ selectedSite = {}, filteredResults = [], isExpanded = false }) {
-  
-  // OPTIMIZATION: Pre-calculate counts and valid coordinates once per data change O(N)
+
   const processedData = useMemo(() => {
     const idMap = {};
     filteredResults.forEach(s => {
@@ -104,32 +272,42 @@ export default function MapVisualizer({ selectedSite = {}, filteredResults = [],
   const currentZoom = selectedSite.lat ? 18 : (isExpanded ? 15 : 10);
 
   return (
-    <MapContainer center={[centreLat, centreLng]} zoom={currentZoom} zoomControl={isExpanded} style={{ height: "100%", width: "100%", zIndex: 1 }} preferCanvas={true}>
-      <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-      <MapRecenter
-         expanded={isExpanded}
-         filteredResults={filteredResults}
-         selectedSite={selectedSite}
-      />
+    <MapContainer center={[centreLat, centreLng]} zoom={currentZoom} zoomControl={isExpanded} style={{ height: "100%", width: "100%" }} preferCanvas={true}>
       
+      <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+
+      <MapRecenter
+        expanded={isExpanded}
+        filteredResults={filteredResults}
+        selectedSite={selectedSite}
+      />
+
       <WMSTileLayer
         url="https://mesonet.agron.iastate.edu/cgi-bin/wms/goes/global_ir.cgi"
         layers="goes_global_ir"
         format="image/png"
         transparent={true}
         opacity={0.4}
-        zIndex={10}
       />
 
-      <MarkerClusterGroup chunkedLoading maxClusterRadius={60} iconCreateFunction={createCustomClusterIcon} disableClusteringAtZoom={16}>
+      <MarkerClusterGroup
+        chunkedLoading
+        maxClusterRadius={60}
+        iconCreateFunction={createCustomClusterIcon}
+        disableClusteringAtZoom={16}
+      >
         {processedData.map((site) => {
           const isSelected = selectedSite.index === site.originalIndex;
-          if (isSelected) return null; // Render outside cluster group
+          if (isSelected) return null;
 
           return (
-            <Marker key={`pin-${site.plaId}-${site.originalIndex}`} position={[site.latNum, site.lngNum]} icon={getCustomIcon(site.matchStatus, false, site.dupCount)}>
+            <Marker
+              key={`pin-${site.plaId}-${site.originalIndex}`}
+              position={[site.latNum, site.lngNum]}
+              icon={getCustomIcon(site.matchStatus, false, site.dupCount)}
+            >
               <Tooltip direction="right" offset={[10, 0]} opacity={0.9}>
-                <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#222' }}>{site.plaId}</span>
+                <span style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{site.plaId}</span>
               </Tooltip>
               <Popup>
                 <strong>{site.plaId}</strong><br/>
@@ -142,12 +320,12 @@ export default function MapVisualizer({ selectedSite = {}, filteredResults = [],
 
       {selectedSite.lat && (
         <Marker 
-          position={[parseFloat(selectedSite.lat) + 0.0001, parseFloat(selectedSite.lng) + 0.0001]} 
+          position={[parseFloat(selectedSite.lat), parseFloat(selectedSite.lng)]}
           icon={getCustomIcon(selectedSite.matchStatus || 'UNCHANGED', true, 1)}
           zIndexOffset={1000}
         >
-          <Tooltip permanent direction="right" offset={[14, 0]} opacity={0.9}>
-            <span style={{ fontSize: '0.9rem', fontWeight: 'bold', color: '#001f5f' }}>{selectedSite.id}</span>
+          <Tooltip permanent direction="right" offset={[14, 0]}>
+            <span style={{ fontWeight: 'bold' }}>{selectedSite.id}</span>
           </Tooltip>
         </Marker>
       )}

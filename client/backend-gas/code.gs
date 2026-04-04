@@ -1,339 +1,448 @@
 /**
- * Project: Globe RSC Network Delta Engine
- * Version: Flat Unpivoted Output + BCF Macro Logic + Geo-Inference
+ * Globe RSC Network Delta Engine - Backend API
+ * Google Apps Script backend with Google Sheets & Drive integration
+ * Version: Optimized Blob Storage (Pointer Architecture)
  */
 
-// --- 1. THE "FRONT DOOR" ---
+// --- CONFIGURATION ---
+// --- CONFIGURATION ---
+const CONFIG = {
+  DATA_SHEET_NAME: 'UploadedData',
+  USERS_SHEET_NAME: 'Users',
+  LAST_MODIFIED_SHEET_NAME: 'LastModified',
+  DRIVE_FOLDER_NAME: 'GLOBE RSC'
+};
+
+// --- DRIVE STORAGE HELPERS (THE FIX) ---
+
+function getOrCreateDataFolder() {
+  const folders = DriveApp.getFoldersByName(CONFIG.DRIVE_FOLDER_NAME);
+  if (folders.hasNext()) {
+    return folders.next();
+  }
+  return DriveApp.createFolder(CONFIG.DRIVE_FOLDER_NAME);
+}
+
+function saveJsonToDrive(fileName, dataObj) {
+  if (!dataObj || (Array.isArray(dataObj) && dataObj.length === 0)) return "";
+  const folder = getOrCreateDataFolder();
+  const file = folder.createFile(fileName, JSON.stringify(dataObj), MimeType.PLAIN_TEXT);
+  return file.getId(); // Return only the ID for the spreadsheet
+}
+
+function getJsonFromDriveOrCell(cellValue, fallback = []) {
+  if (!cellValue) return fallback;
+  
+  // If it doesn't look like JSON (no brackets), it's a Drive File ID
+  if (typeof cellValue === 'string' && !cellValue.startsWith('[') && !cellValue.startsWith('{')) {
+    try {
+      const file = DriveApp.getFileById(cellValue);
+      return JSON.parse(file.getBlob().getDataAsString());
+    } catch(e) {
+      Logger.log("Failed to fetch Drive file: " + e.message);
+      return fallback;
+    }
+  }
+  // Fallback for your legacy data already saved in cells
+  return safeJsonParse(cellValue, fallback);
+}
+
+function deleteFileFromDrive(fileId) {
+  if (fileId && typeof fileId === 'string' && !fileId.startsWith('[') && !fileId.startsWith('{')) {
+    try {
+      DriveApp.getFileById(fileId).setTrashed(true);
+    } catch(e) {
+      Logger.log("Failed to trash file: " + e.message);
+    }
+  }
+}
+
+// --- OAUTH & AUTHENTICATION ---
+function formatDisplayName(value) {
+  if (!value) return '';
+  return String(value)
+    .split(/[\s._-]+/)
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ');
+}
+
+function buildUserProfile() {
+  const user = Session.getActiveUser();
+  const email = String(user.getEmail() || '').trim();
+  const userId = email || 'unknown-user';
+
+  // 🚀 2. SMART NAME EXTRACTION
+  let baseName = 'Workspace User';
+  
+  if (email && email.includes('@')) {
+    // Splits "adrian.bastes@globe.com.ph" -> "adrian.bastes" -> "adrian bastes"
+    baseName = email.split('@')[0].replace(/[._0-9]/g, ' '); 
+  }
+
+  return {
+    userId: userId, // React now receives the exact email here!
+    name: baseName,
+    displayName: formatDisplayName(baseName) || 'Unknown User', // Capitalizes it!
+    isAuthenticated: Boolean(email)
+  };
+}
+
+function getUserInfo() {
+  try {
+    return { success: true, data: buildUserProfile() };
+  } catch (error) {
+    return { success: false, error: 'Authentication failed: ' + error.message };
+  }
+}
+
+// --- GOOGLE SHEETS DATABASE FUNCTIONS ---
+
+function initializeSpreadsheet() {
+  try {
+    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+
+    let dataSheet = spreadsheet.getSheetByName(CONFIG.DATA_SHEET_NAME);
+    if (!dataSheet) dataSheet = spreadsheet.insertSheet(CONFIG.DATA_SHEET_NAME);
+    ensureHeaderRow(dataSheet, ['id', 'userId', 'uploadDate', 'fileName', 'dataType', 'rawDataId', 'processedDataId', 'metadata']);
+
+    let usersSheet = spreadsheet.getSheetByName(CONFIG.USERS_SHEET_NAME);
+    if (!usersSheet) usersSheet = spreadsheet.insertSheet(CONFIG.USERS_SHEET_NAME);
+    ensureHeaderRow(usersSheet, ['userId', 'name', 'displayName', 'lastAccess', 'uploadCount']);
+
+    let lastModifiedSheet = spreadsheet.getSheetByName(CONFIG.LAST_MODIFIED_SHEET_NAME);
+    if (!lastModifiedSheet) lastModifiedSheet = spreadsheet.insertSheet(CONFIG.LAST_MODIFIED_SHEET_NAME);
+    ensureHeaderRow(lastModifiedSheet, ['timestamp', 'userId', 'userName', 'userDisplayName', 'action', 'fileName', 'dataType', 'details']);
+
+    return { success: true, message: 'Spreadsheet initialized successfully' };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Store uploaded data using Pointer Architecture
+ */
+/**
+ * Store uploaded data using Pointer Architecture (Google Drive)
+ */
+function storeUploadedData(fileName, dataType, rawData, processedData, metadata) {
+  const lock = LockService.getScriptLock();
+  
+  try {
+    if (!lock.tryLock(15000)) {
+      return { success: false, error: 'Database is currently busy serving another user. Please try saving again in a few seconds.' };
+    }
+
+    initializeSpreadsheet();
+
+    const userInfo = getUserInfo();
+    if (!userInfo.success) return userInfo;
+
+    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = spreadsheet.getSheetByName(CONFIG.DATA_SHEET_NAME);
+
+    const id = Utilities.getUuid();
+    const uploadDate = new Date().toISOString();
+
+    // ZERO TRUST SECURITY: Ignore frontend names, force the secure Google identity
+    const actualName = userInfo.data.name;
+    const actualDisplayName = userInfo.data.displayName;
+    
+    // Optional: Overwrite the metadata so the exact secure name is saved in the history log too
+    if (metadata) {
+      metadata.engineerName = actualDisplayName;
+    }
+    
+    // FILE NAMING SYSTEM
+    // 1. Clean the engineer's name (e.g., "Adrian Bastes" becomes "Adrian_Bastes")
+    const safeName = actualDisplayName.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
+
+    // 2. Get the exact time in Philippine Standard Time (PHT)
+    // Format will look like: 2026-04-04_183633 (Year-Month-Day_HourMinSec)
+    const timestampStr = Utilities.formatDate(new Date(), "Asia/Manila", "yyyy-MM-dd_HHmmss");
+
+    // 3. Construct the clean, auditable filenames
+    const rawFileName = `RAW_${safeName}_${timestampStr}.json`;
+    const processedFileName = `PROCESSED_${safeName}_${timestampStr}.json`;
+
+    // 4. Save to Drive (Returns the short 33-character file IDs)
+    const rawFileId = saveJsonToDrive(rawFileName, rawData);
+    const processedFileId = saveJsonToDrive(processedFileName, processedData);
+
+    const rowData = [
+      id,
+      userInfo.data.userId,
+      uploadDate,
+      fileName,
+      dataType,
+      rawFileId,          // 🚀 Now storing a tiny 33-char ID!
+      processedFileId,    // 🚀 Now storing a tiny 33-char ID!
+      JSON.stringify(metadata || {}) // Metadata stays in sheet (it's small)
+    ];
+
+    sheet.appendRow(rowData);
+
+    updateUserStats(userInfo.data.userId, actualName, actualDisplayName, spreadsheet);
+    
+    const processedCount = Array.isArray(processedData) ? processedData.length : 0;
+    const rawCount = Array.isArray(rawData) ? rawData.length : 0;
+    updateLastModified(userInfo.data.userId, actualName, actualDisplayName, fileName, dataType, 'upload', `Processed ${processedCount || rawCount} records`, spreadsheet);
+
+    cleanUpOldData(dataType, 15, spreadsheet);
+
+    return { success: true, data: { id: id, message: 'Data stored successfully' } };
+  } catch (error) {
+    return { success: false, error: 'Failed to store data: ' + error.message };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function getUserUploadedData(limit = 50, dataType = '') {
+  try {
+    const userInfo = getUserInfo();
+    if (!userInfo.success) return userInfo;
+
+    const userRows = getUserDataRows(dataType);
+    if (userRows.length === 0) return { success: true, data: [] };
+
+    const userData = userRows.slice(0, limit).map(row => ({
+      id: row[0], userId: row[1], uploadDate: row[2], fileName: row[3], dataType: row[4],
+      rawData: getJsonFromDriveOrCell(row[5], []), //Fetch from Drive
+      processedData: getJsonFromDriveOrCell(row[6], []), //Fetch from Drive
+      metadata: safeJsonParse(row[7], {})
+    }));
+
+    return { success: true, data: userData };
+  } catch (error) {
+    return { success: false, error: 'Failed to retrieve data: ' + error.message };
+  }
+}
+
+function getUserUploadedDataSummary(limit = 50, dataType = '') {
+  try {
+    const userInfo = getUserInfo();
+    if (!userInfo.success) return userInfo;
+
+    const userRows = getUserDataRows(dataType);
+    return { success: true, data: userRows.slice(0, limit).map(buildStoredDataSummary) };
+  } catch (error) {
+    return { success: false, error: 'Failed to retrieve data summary: ' + error.message };
+  }
+}
+
+function getUploadedDataById(dataId) {
+  try {
+    const userInfo = getUserInfo();
+    if (!userInfo.success) return userInfo;
+
+    const userRows = getUserDataRows();
+    const row = userRows.find(item => item[0] === dataId);
+    if (!row) return { success: false, error: 'Stored data not found or access denied' };
+
+    return {
+      success: true,
+      data: {
+        id: row[0], userId: row[1], uploadDate: row[2], fileName: row[3], dataType: row[4],
+        rawData: getJsonFromDriveOrCell(row[5], []), //Fetch from Drive
+        processedData: getJsonFromDriveOrCell(row[6], []), //Fetch from Drive
+        metadata: safeJsonParse(row[7], {})
+      }
+    };
+  } catch (error) {
+    return { success: false, error: 'Failed to retrieve stored data: ' + error.message };
+  }
+}
+
+function getLatestUserUploadedData(dataType = '') {
+  try {
+    const userInfo = getUserInfo();
+    if (!userInfo.success) return userInfo;
+
+    const userRows = getUserDataRows(dataType);
+    if (userRows.length === 0) return { success: true, data: null };
+
+    return getUploadedDataById(userRows[0][0]);
+  } catch (error) {
+    return { success: false, error: 'Failed to retrieve latest stored data: ' + error.message };
+  }
+}
+
+function updateUserStats(userId, name, displayName, spreadsheet) {
+  try {
+    const sheet = spreadsheet.getSheetByName(CONFIG.USERS_SHEET_NAME);
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0] || [];
+    
+    let userRowIndex = -1;
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][headers.indexOf('userId')] === userId) {
+        userRowIndex = i + 1; break;
+      }
+    }
+
+    const now = new Date().toISOString();
+    if (userRowIndex === -1) {
+      sheet.appendRow([userId, name, displayName, now, 1]);
+    } else {
+      const currentCount = Number(data[userRowIndex - 1][headers.indexOf('uploadCount')] || 0);
+      sheet.getRange(userRowIndex, headers.indexOf('name') + 1).setValue(name);
+      sheet.getRange(userRowIndex, headers.indexOf('displayName') + 1).setValue(displayName);
+      sheet.getRange(userRowIndex, headers.indexOf('lastAccess') + 1).setValue(now);
+      sheet.getRange(userRowIndex, headers.indexOf('uploadCount') + 1).setValue(currentCount + 1);
+    }
+  } catch (error) { Logger.log('Failed to update stats: ' + error.message); }
+}
+
+function updateLastModified(userId, name, displayName, fileName, dataType, action = 'upload', details = '', spreadsheet) {
+  try {
+    const sheet = spreadsheet.getSheetByName(CONFIG.LAST_MODIFIED_SHEET_NAME);
+    sheet.appendRow([new Date().toISOString(), userId, name, displayName, action, fileName, dataType, details]);
+  } catch (error) { Logger.log('Failed to update last modified: ' + error.message); }
+}
+
+function getLastModifiedInfo(dataType = '') {
+  try {
+    initializeSpreadsheet();
+    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = spreadsheet.getSheetByName(CONFIG.LAST_MODIFIED_SHEET_NAME);
+    const data = sheet.getDataRange().getValues();
+
+    if (data.length <= 1) return { success: true, data: null };
+
+    const headers = data[0] || [];
+    const dataTypeColumn = headers.indexOf('dataType');
+
+    let lastEntry = null;
+    for (let i = data.length - 1; i >= 1; i--) {
+      if (!dataType || data[i][dataTypeColumn] === dataType) {
+        lastEntry = data[i]; break;
+      }
+    }
+
+    if (!lastEntry) return { success: true, data: null };
+
+    return {
+      success: true,
+      data: {
+        timestamp: lastEntry[headers.indexOf('timestamp')], userId: lastEntry[headers.indexOf('userId')],
+        userName: lastEntry[headers.indexOf('userName')], userDisplayName: lastEntry[headers.indexOf('userDisplayName')],
+        action: lastEntry[headers.indexOf('action')], fileName: lastEntry[headers.indexOf('fileName')],
+        dataType: lastEntry[headers.indexOf('dataType')], details: lastEntry[headers.indexOf('details')]
+      }
+    };
+  } catch (error) { return { success: false, error: 'Failed to get last modified info: ' + error.message }; }
+}
+
+function deleteUploadedData(dataId) {
+  const lock = LockService.getScriptLock();
+  try {
+    if (!lock.tryLock(10000)) return { success: false, error: 'Database busy.' };
+
+    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = spreadsheet.getSheetByName(CONFIG.DATA_SHEET_NAME);
+    const data = sheet.getDataRange().getValues();
+
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][0] === dataId) {
+        //Delete from Drive first
+        deleteFileFromDrive(data[i][5]);
+        deleteFileFromDrive(data[i][6]);
+        
+        sheet.deleteRow(i + 1);
+        return { success: true, message: 'Data deleted successfully' };
+      }
+    }
+    return { success: false, error: 'Data not found' };
+  } catch (error) { return { success: false, error: 'Failed to delete data: ' + error.message }; }
+  finally { lock.releaseLock(); }
+}
+
+// --- WEB APP ENDPOINTS ---
+
 function doGet(e) {
   return HtmlService.createHtmlOutputFromFile('index')
-    .setTitle('Globe RSC')
+    .setTitle('Globe RSC Data Manager')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 
-// --- 2. GLOBAL HELPER FUNCTIONS ---
-
-function extractBaseAndSuffix(nmsString) {
-  if (!nmsString) return { cleanBase: "", displayBase: "", suffix: "", suffixSet: new Set() };
-  
-  let originalStr = String(nmsString).toUpperCase().trim();
-  let displayBase = originalStr;
-  let suffixLetters = "";
-
-  const anchors = [
-    "DDS", "AGUSAN", "AGUADA", "AFGA", "CDO", "DVO", "DDN", "DDO", "DVOR", "DVOC", "KUD", "MOR", "MISOCC",
-    "CVLY", "NCOT", "SCOT", "MGDN", "LDN", "LDS", "BUK", "ZDS", "ZDN", "MISOR", "MOCC", "SDN", "SDS", "AGS", "AGN", "SAR", "COT",
-    "MKLALA", "PANABO", "TAGUM", "DIGOS", "GENSAN", "ZAMBOA", "POLOMO", "MRAMAG", "KIDAP", "COTAB", "MATI", "GINGOO", "DIPOL", "OZAMIS", "OZM", "ILIGAN", "MARAWI", "BUTUAN", "CARMEN", "STOMAS", "KPALON", "SAMAL", "PANTUK", "MACO", "MALITA", "BANSAL", "PADADA", "SULOP", "SMARIA", "GLAN", "ALABEL", "MALAPAT", "SFRANC", "MIDSAY", "SFERN", "PGDIAN", "MFORT", "TACUROS", "BISLIG", "CLAVER", "BAYABS", "DAVAO",
-    // VIP Protected Bases
-    "TRNSCOZ", "TRNSCO", "BASCOW", "BAS"
-  ];
-
-  let matched = false;
-
-  for (const anchor of anchors) {
-    let idx = originalStr.lastIndexOf(anchor);
-    if (idx !== -1) {
-      let potentialSuffix = originalStr.slice(idx + anchor.length);
-      let suffixTest = potentialSuffix.match(/^([-_ ]*)((?:ID|AS|[XYLFWKHVZJBMNPRTD])*)$/i);
-
-      if (suffixTest && suffixTest[0] === potentialSuffix) {
-        let separator = suffixTest[1]; 
-        let actualSuffix = suffixTest[2]; 
-        displayBase = originalStr.slice(0, idx + anchor.length) + separator; 
-        suffixLetters = actualSuffix;
-        matched = true;
-        break;
-      }
-    }
-  }
-
-  if (!matched) {
-    let fallbackMatch = originalStr.match(/([-_ ]*)((?:ID|AS|[XYLFWKHVZJBMNPRTD])+)$/i);
-    if (fallbackMatch) {
-      let separator = fallbackMatch[1];
-      let actualSuffix = fallbackMatch[2];
-      displayBase = originalStr.slice(0, -fallbackMatch[0].length) + separator;
-      suffixLetters = actualSuffix;
-    }
-  }
-
-  let cleanBase = displayBase.replace(/[^A-Z0-9]/g, "");
-  
-  return { 
-    cleanBase: cleanBase, 
-    displayBase: displayBase, 
-    suffix: suffixLetters,
-    suffixSet: new Set(suffixLetters.split('')) 
-  };
-}
-
-function getIndex(headers, possibleNames) {
-  for (var i = 0; i < headers.length; i++) {
-    var h = String(headers[i]).trim().toUpperCase();
-    if (possibleNames.indexOf(h) > -1) return i;
-  }
-  return -1;
-}
-
-function getCoords(row, latIdx, lngIdx) {
-  return {
-    lat: latIdx > -1 && row[latIdx] ? row[latIdx] : 7.1905,
-    lng: lngIdx > -1 && row[lngIdx] ? row[lngIdx] : 125.4503
-  };
-}
-
-function inferLocation(baseName) {
-  var name = String(baseName).toUpperCase();
-  var result = { city: "", prov: "", area: "" };
-
-  var geoMap = [
-    { keys: ["PANABO", "TADECO"], city: "PANABO CITY", prov: "DAVAO DEL NORTE" },
-    { keys: ["SAMAL", "IGACOS"], city: "ISLAND GARDEN CITY OF SAMAL", prov: "DAVAO DEL NORTE" },
-    { keys: ["TAGUM"], city: "TAGUM CITY", prov: "DAVAO DEL NORTE" },
-    { keys: ["CARMEN"], city: "CARMEN", prov: "DAVAO DEL NORTE" },
-    { keys: ["DAVAO", "DVO", "ULAS"], city: "DAVAO CITY", prov: "DAVAO DEL SUR" },
-    { keys: ["DIGOS", "DDS"], city: "DIGOS CITY", prov: "DAVAO DEL SUR" },
-    { keys: ["MATI", "DVOR"], city: "MATI CITY", prov: "DAVAO ORIENTAL" },
-    { keys: ["KIDAPAWAN", "KIDAP"], city: "KIDAPAWAN CITY", prov: "NORTH COTABATO" },
-    { keys: ["COTABATO", "COTAB"], city: "COTABATO CITY", prov: "MAGUINDANAO DEL NORTE" },
-    { keys: ["ZAMBOANGA", "ZAMBOA"], city: "ZAMBOANGA CITY", prov: "ZAMBOANGA DEL SUR" },
-    { keys: ["GENSAN", "GSC"], city: "GENERAL SANTOS CITY", prov: "SOUTH COTABATO" },
-    { keys: ["CDO", "CAGAYAN"], city: "CAGAYAN DE ORO CITY", prov: "MISAMIS ORIENTAL" }
-  ];
-
-  for (var i = 0; i < geoMap.length; i++) {
-    for (var j = 0; j < geoMap[i].keys.length; j++) {
-      if (name.includes(geoMap[i].keys[j])) {
-        result.city = geoMap[i].city;
-        result.prov = geoMap[i].prov;
-        return result;
-      }
-    }
-  }
-  return result;
-}
-
-function generateSpecificTechLabel(baseGen, suffixStr) {
-  var str = String(suffixStr).toUpperCase();
-  var label = baseGen;
-  
-  if (baseGen === "4G") {
-    var types = [];
-    if (/[FLWY]/.test(str)) types.push("");
-    if (/H/.test(str)) types.push("");
-    if (/V/.test(str)) types.push("");
-    if (types.length > 0) label = "4G" + types.join("");
-  } else if (baseGen === "5G") {
-    var types = [];
-    if (/M/.test(str)) types.push("");
-    if (/[PN]/.test(str)) types.push("");
-    if (types.length > 0) label = "5G" + types.join("");
-  }
-  return label;
-}
-
-// --- 3. THE ETL LOGIC (Main Processor) ---
-function processCSVComparison(nmsText, udmText) {
+function doPost(e) {
   try {
-    var nmsData = Utilities.parseCsv(nmsText);
-    var udmData = Utilities.parseCsv(udmText);
-    
-    if (nmsData.length < 2 || udmData.length < 2) {
-      throw new Error("File(s) empty.");
+    const data = JSON.parse(e.postData.contents);
+    const action = data.action;
+
+    switch (action) {
+      case 'storeData': return ContentService.createTextOutput(JSON.stringify(storeUploadedData(data.fileName, data.dataType, data.rawData, data.processedData, data.metadata))).setMimeType(ContentService.MimeType.JSON);
+      case 'getData': return ContentService.createTextOutput(JSON.stringify(getUserUploadedData(data.limit, data.dataType))).setMimeType(ContentService.MimeType.JSON);
+      case 'getDataSummary': return ContentService.createTextOutput(JSON.stringify(getUserUploadedDataSummary(data.limit, data.dataType))).setMimeType(ContentService.MimeType.JSON);
+      case 'getDataById': return ContentService.createTextOutput(JSON.stringify(getUploadedDataById(data.dataId))).setMimeType(ContentService.MimeType.JSON);
+      case 'getLatestData': return ContentService.createTextOutput(JSON.stringify(getLatestUserUploadedData(data.dataType))).setMimeType(ContentService.MimeType.JSON);
+      case 'deleteData': return ContentService.createTextOutput(JSON.stringify(deleteUploadedData(data.dataId))).setMimeType(ContentService.MimeType.JSON);
+      case 'getUserInfo': return ContentService.createTextOutput(JSON.stringify(getUserInfo())).setMimeType(ContentService.MimeType.JSON);
+      case 'initialize': return ContentService.createTextOutput(JSON.stringify(initializeSpreadsheet())).setMimeType(ContentService.MimeType.JSON);
+      case 'getLastModified': return ContentService.createTextOutput(JSON.stringify(getLastModifiedInfo(data.dataType))).setMimeType(ContentService.MimeType.JSON);
+      default: return ContentService.createTextOutput(JSON.stringify({ success: false, error: 'Unknown action: ' + action })).setMimeType(ContentService.MimeType.JSON);
     }
-    
-    var nmsHeaders = nmsData[0];
-    var udmHeaders = udmData[0];
-
-    var udmNameIdx = getIndex(udmHeaders, ['BCF NAME']);
-    var udmIdIdx = getIndex(udmHeaders, ['PLA_ID', 'PLA ID']);
-    var udmLatIdx = getIndex(udmHeaders, ['LATITUDE', 'LAT']);
-    var udmLngIdx = getIndex(udmHeaders, ['LONGITUDE', 'LONG']);
-    var udmSAreaIdx = getIndex(udmHeaders, ['ASSIGNED_AREA', 'ASSIGN_AREA', 'ASSIGN AREA', 'ASSIGNED AREA']);
-    var udmProIdx = getIndex(udmHeaders, ['PROVINCE']);
-    var udmMCtyIdx = getIndex(udmHeaders, ['ASSIGN_CITY/MUNICIPALITY']);
-    var udmSAddIdx = getIndex(udmHeaders, ['SITE_ADDRESS', 'SITE_ADD', 'SITE ADDRESS', 'SITE ADD' ]);
-    var udmTrtIdx = getIndex(udmHeaders, ['TERRITORY']);
-    var udmHSvrIdx = getIndex(udmHeaders, ['HIROSHIMA SEVERITY', 'HIROSHIMA_SEVERITY']);
-    var udmtwrCIdx = getIndex(udmHeaders, ['TOWERCO']);
-    
-    var nms2GNameIdx = getIndex(nmsHeaders, ['2G', 'NAME']);
-    var nms4GNameIdx = getIndex(nmsHeaders, ['4G', 'ENBNAME']);
-    var nms5GNameIdx = getIndex(nmsHeaders, ['5G', 'GNBCUNAME']);
-
-// --- A. Build the UDM Hash Map ---
-    var udmTable = {};
-    for (var j = 1; j < udmData.length; j++){
-      if (udmNameIdx === -1) continue;
-      
-      // THE FIX: The Phantom Row Destroyer
-      // If the entire CSV row is completely empty (caused by trailing newlines), skip it!
-      if (udmData[j].join("").replace(/,/g, "").trim() === "") continue;
-      
-      var rawName = String(udmData[j][udmNameIdx]);
-      var plaId = udmIdIdx > -1 ? String(udmData[j][udmIdIdx]).trim() : "UNKNOWN_ID_" + j;
-
-      // 1. Force uppercase and destroy hidden spaces
-      var cleanedName = rawName.toUpperCase().replace(/[\s\uFEFF\xA0]/g, ''); 
-      
-      // 2. The precise Kill List based on your data profile
-      var invalidValues = ["", "NA", "NONE", "NULL", "-"];
-      var isInvalidName = invalidValues.includes(cleanedName);
-      
-      // If invalid, assign a synthetic name so it gets caught as REMOVED
-      var originalUdmName = isInvalidName ? "UNNAMED_SITE_" + plaId : rawName.trim().toUpperCase();
-      
-      var parsedUdm = extractBaseAndSuffix(originalUdmName);
-      var sanitizedUdmKey = parsedUdm.cleanBase;
-      
-      var isDuplicateBase = false;
-      if (udmTable[sanitizedUdmKey]) {
-        sanitizedUdmKey = sanitizedUdmKey + "_DUPLICATE_" + j;
-        isDuplicateBase = true; // NEW: Set a flag
-      }
-      
-      var coords = getCoords(udmData[j], udmLatIdx, udmLngIdx);
-      
-      udmTable[sanitizedUdmKey] = {
-        plaId: plaId,
-        lat: coords.lat,
-        lng: coords.lng,
-        originalName: isInvalidName ? cleanedName || "BLANK" : originalUdmName, 
-        isGhostSite: isInvalidName, 
-        isDuplicate: isDuplicateBase, // NEW: Save the flag so Section D can see it
-        allowedSuffixSet: parsedUdm.suffixSet, 
-        sArea: udmSAreaIdx > -1 ? udmData[j][udmSAreaIdx] : "",
-        prov: udmProIdx > -1 ? String(udmData[j][udmProIdx]).trim().toUpperCase() : "",
-        mCity: udmMCtyIdx > -1 ? udmData[j][udmMCtyIdx] : "",
-        sAdd: udmSAddIdx > -1 ? udmData[j][udmSAddIdx] : "",
-        trt: udmTrtIdx > -1 ? udmData[j][udmTrtIdx] : "",
-        hSvr: udmHSvrIdx > -1 ? udmData[j][udmHSvrIdx] : "",
-        twrC: udmtwrCIdx > -1 ? udmData[j][udmtwrCIdx] : ""
-      };
-    }
-
-    // --- B. Synthesize NMS Masterlist ---
-    var siteGroups = {};
-
-    for (var j = 1; j < nmsData.length; j++){
-      var items = [
-        { name: nms2GNameIdx > -1 ? String(nmsData[j][nms2GNameIdx]).trim() : "", gen: "2G" },
-        { name: nms4GNameIdx > -1 ? String(nmsData[j][nms4GNameIdx]).trim() : "", gen: "4G" },
-        { name: nms5GNameIdx > -1 ? String(nmsData[j][nms5GNameIdx]).trim() : "", gen: "5G" }
-      ].filter(i => i.name !== "");
-
-      items.forEach(item => {
-        var parsed = extractBaseAndSuffix(item.name);
-        var bName = parsed.cleanBase; 
-        if (!bName) return;
-
-        if (!siteGroups[bName]) {
-          siteGroups[bName] = {
-            displayBase: parsed.displayBase,
-            suffixes: new Set(),
-            originalEntries: []
-          };
-        }
-        
-        siteGroups[bName].originalEntries.push({
-          rawName: item.name,
-          baseGen: item.gen,
-          suffix: parsed.suffix
-        });
-
-        for (let char of parsed.suffix) {
-          siteGroups[bName].suffixes.add(char.toUpperCase());
-        }
-      });
-    }
-
-    // --- C. Cross-Reference & UNPIVOT Output ---
-    var report = [];
-    var matchedUdmKeys = new Set();
-
-    for (var bName in siteGroups) {
-      var group = siteGroups[bName];
-      var udmRowMatch = udmTable[bName];
-
-      var status = "NEW";
-      var remarks = "Synthesized from NMS.";
-      var inferredLocation = udmRowMatch ? null : inferLocation(group.displayBase);
-
-      if (udmRowMatch) {
-        matchedUdmKeys.add(bName);
-        
-        var nmsSet = group.suffixes;
-        var udmSet = udmRowMatch.allowedSuffixSet;
-
-        var isSameSize = nmsSet.size === udmSet.size;
-        var hasAll = Array.from(nmsSet).every(char => udmSet.has(char));
-
-        if (isSameSize && hasAll) {
-          status = "UNCHANGED";
-          remarks = "Site BCF validated perfectly against UDM.";
-        } else {
-          status = "MISMATCH";
-          remarks = `BCF Mismatch: UDM expects [${udmRowMatch.originalName}].`;
-        }
-      }
-
-      group.originalEntries.forEach(entry => {
-        var specificTechLabel = generateSpecificTechLabel(entry.baseGen, entry.suffix);
-
-        report.push({
-          plaId: udmRowMatch ? udmRowMatch.plaId : "NEW_SITE",
-          matchStatus: status, 
-          techName: entry.rawName, 
-          baseLocation: group.displayBase,
-          techGen: specificTechLabel, 
-          nmsName: entry.rawName, 
-          lat: udmRowMatch ? udmRowMatch.lat : "",
-          lng: udmRowMatch ? udmRowMatch.lng : "",
-          sArea: udmRowMatch ? udmRowMatch.sArea : inferredLocation.area,
-          prov: udmRowMatch ? udmRowMatch.prov : inferredLocation.prov,
-          mCity: udmRowMatch ? udmRowMatch.mCity : inferredLocation.city,
-          sAdd: udmRowMatch ? udmRowMatch.sAdd : "",
-          trt: udmRowMatch ? udmRowMatch.trt : "",
-          hSvr: udmRowMatch ? udmRowMatch.hSvr : "",
-          twrC: udmRowMatch ? udmRowMatch.twrC : towerC(entry.rawName),
-          region: dict(udmRowMatch ? udmRowMatch.prov : inferredLocation.prov),
-          remarks: remarks
-        });
-      });
-    }
-
-    // --- D. Capture REMOVED Sites ---
-    for (var udmKey in udmTable) {
-      if (!matchedUdmKeys.has(udmKey)) {
-        var u = udmTable[udmKey];
-        
-        // THE FIX: If it's a ghost OR a duplicate, force the PLA_ID into the text!
-        var forceUnique = u.isGhostSite || u.isDuplicate;
-        var uniqueDisplayBase = forceUnique ? u.originalName + " (" + u.plaId + ")" : extractBaseAndSuffix(u.originalName).displayBase;
-        
-        report.push({
-          plaId: u.plaId, 
-          matchStatus: "REMOVED", 
-          techName: forceUnique ? uniqueDisplayBase : u.originalName, 
-          baseLocation: uniqueDisplayBase, 
-          techGen: "UDM Only", 
-          nmsName: forceUnique ? uniqueDisplayBase : u.originalName,
-          lat: u.lat, 
-          lng: u.lng, 
-          prov: u.prov, 
-          remarks: u.isGhostSite ? "UDM BCF Name was blank/missing." : (u.isDuplicate ? "CRITICAL: UDM Database Collision! Multiple PLA_IDs share this exact BCF Name." : "Site BCF found in UDM but missing from NMS."),
-          sArea: u.sArea, 
-          mCity: u.mCity, 
-          sAdd: u.sAdd, 
-          trt: u.trt, 
-          hSvr: u.hSvr, 
-          twrC: u.twrC
-        });
-      }
-    }
-
-    return JSON.stringify({ success: true, data: report, count: report.length });
-  } catch (e) {
-    return JSON.stringify({ success: false, error: e.toString() });
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({ success: false, error: 'Request processing failed: ' + error.message })).setMimeType(ContentService.MimeType.JSON);
   }
+}
+
+// --- UTILITY FUNCTIONS ---
+
+function ensureHeaderRow(sheet, headers) {
+  const currentMaxColumns = sheet.getMaxColumns();
+  if (currentMaxColumns < headers.length) sheet.insertColumnsAfter(currentMaxColumns, headers.length - currentMaxColumns);
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+}
+
+function safeJsonParse(value, fallback) {
+  try { return JSON.parse(value || JSON.stringify(fallback)); } catch (error) { return fallback; }
+}
+
+function getUserDataRows(dataType = '') {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = spreadsheet.getSheetByName(CONFIG.DATA_SHEET_NAME);
+  const data = sheet.getDataRange().getValues();
+
+  if (data.length <= 1) return [];
+
+  return data.slice(1)
+    .filter(row => !dataType || row[4] === dataType)
+    .sort((a, b) => new Date(b[2]) - new Date(a[2]));
+}
+
+function buildStoredDataSummary(row) {
+  const metadata = safeJsonParse(row[7], {});
+  return {
+    id: row[0], userId: row[1], uploadDate: row[2], fileName: row[3], dataType: row[4],
+    metadata: metadata, processedCount: typeof metadata.processedRecords === 'number' ? metadata.processedRecords : null
+  };
+}
+
+function cleanUpOldData(dataType, maxKeep = 15, spreadsheet) {
+  try {
+    const sheet = spreadsheet.getSheetByName(CONFIG.DATA_SHEET_NAME);
+    const data = sheet.getDataRange().getValues();
+    if (data.length <= maxKeep + 1) return; 
+
+    let typeRows = [];
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][4] === dataType) typeRows.push({ rowIndex: i + 1, timestamp: new Date(data[i][2]).getTime(), rawFileId: data[i][5], processedFileId: data[i][6] });
+    }
+
+    typeRows.sort((a, b) => b.timestamp - a.timestamp);
+
+    if (typeRows.length > maxKeep) {
+      const rowsToDelete = typeRows.slice(maxKeep).sort((a, b) => b.rowIndex - a.rowIndex);
+      rowsToDelete.forEach(row => {
+        // 🚀 Delete Drive files when cleaning up old records
+        deleteFileFromDrive(row.rawFileId);
+        deleteFileFromDrive(row.processedFileId);
+        sheet.deleteRow(row.rowIndex);
+      });
+    }
+  } catch (error) { Logger.log('Cleanup failed: ' + error.message); }
 }
