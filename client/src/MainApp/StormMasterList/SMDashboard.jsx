@@ -263,7 +263,7 @@ export default function SMDashboard() {
         setIsRefreshingSavedData(true);
         const [userData, storedDataList, latestStoredData, lastModified] = await Promise.all([
           getUserInfo(),
-          getUserUploadedDataSummary(10, 'storm-masterlist'),
+          getUserUploadedDataSummary(10, 'storm-masterlist', true),
           getLatestUserUploadedData('storm-masterlist'),
           getLastModifiedInfo('storm-masterlist')
         ]);
@@ -478,7 +478,7 @@ export default function SMDashboard() {
       )
         .then(async () => {
           const [updatedStoredData, lastModified] = await Promise.all([
-            getUserUploadedDataSummary(10, 'storm-masterlist'),
+            getUserUploadedDataSummary(10, 'storm-masterlist', true),
             getLastModifiedInfo('storm-masterlist')
           ]);
           setStoredData(updatedStoredData);
@@ -515,7 +515,7 @@ export default function SMDashboard() {
   const handleRefreshStoredData = async () => {
     try {
       const [updatedStoredData, lastModified] = await Promise.all([
-        getUserUploadedDataSummary(10, 'storm-masterlist'),
+        getUserUploadedDataSummary(10, 'storm-masterlist', true),
         getLastModifiedInfo('storm-masterlist')
       ]);
       setStoredData(updatedStoredData);
@@ -533,7 +533,7 @@ export default function SMDashboard() {
   const handleLoadStoredData = async (item) => {
     try {
       setIsStoredDataLoading(true);
-      const fullItem = await getUploadedDataById(item.id);
+      const fullItem = await getUploadedDataById(item.id, true, 'storm-masterlist');
       applyStoredProcessedData(fullItem);
       writeCache({
         userInfo,
@@ -749,7 +749,11 @@ export default function SMDashboard() {
     ? new Date(lastModifiedInfo.timestamp).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
     : "No previous sync";
 
-  const myProcessedData = storedData ? storedData.filter(item => item.metadata?.engineerName === engineerName) : [];
+  const myProcessedData = storedData
+    ? storedData.filter(
+        (item) => item.userId === currentUserEmail || item.metadata?.engineerName === engineerName
+      )
+    : [];
 
   // ÃƒÂ°Ã…Â¸Ã…Â¡Ã¢â€šÂ¬ 2. HEADER ACTIONS CREATED SECOND (Now it can safely read the variables above!)
 const exportOptions = [

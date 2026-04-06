@@ -186,7 +186,7 @@ useEffect(() => {
         // ?? ADDED: Fetch getUserInfo() from Google Apps Script
         const [userData, storedDataList, latestStoredData, lastModified] = await Promise.all([
           getUserInfo(), 
-          getUserUploadedDataSummary(10, dashboardMode),
+          getUserUploadedDataSummary(10, dashboardMode, true),
           getLatestUserUploadedData(dashboardMode),
           getLastModifiedInfo(dashboardMode)
         ]);
@@ -470,7 +470,7 @@ useEffect(() => {
         )
           .then(async () => {
             const [updatedStoredData, lastModified] = await Promise.all([
-              getUserUploadedDataSummary(10, dashboardMode),
+              getUserUploadedDataSummary(10, dashboardMode, true),
               getLastModifiedInfo(dashboardMode)
             ]);
             setStoredData(updatedStoredData);
@@ -601,7 +601,7 @@ useEffect(() => {
   const handleLoadStoredData = async (storedDataItem) => {
     try {
       setIsLoading(true);
-      const fullStoredData = await getUploadedDataById(storedDataItem.id);
+      const fullStoredData = await getUploadedDataById(storedDataItem.id, true, dashboardMode);
       applyStoredProcessedData(fullStoredData);
       writeCache({
         userInfo,
@@ -624,7 +624,7 @@ useEffect(() => {
   const handleRefreshStoredData = async () => {
     try {
       const [updatedStoredData, lastModified] = await Promise.all([
-        getUserUploadedDataSummary(10, dashboardMode),
+        getUserUploadedDataSummary(10, dashboardMode, true),
         getLastModifiedInfo(dashboardMode)
       ]);
       setStoredData(updatedStoredData);

@@ -24,163 +24,123 @@ function promisifyGasCall(functionName, ...args) {
   if (!runner) {
     throw new Error('google.script.run is not available');
   }
-  
+
   return new Promise((resolve, reject) => {
     runner.withSuccessHandler(resolve).withFailureHandler(reject)[functionName](...args);
   });
 }
 
-// 🚀 DEVELOPMENT API ENDPOINT
+// DEVELOPMENT API ENDPOINT
 // UPDATE THIS URL when you create a new GAS deployment
 const API_BASE_URL = 'https://script.google.com/a/macros/umindanao.edu.ph/s/AKfycbwZbMC8pCRlYw_uORG-c55zSdNVKfZeRdxPH18sefsRi5XUg_D5CkMoz_HZ4PMWFXc7ZA/exec';
+
+async function postApi(payload) {
+  const response = await fetch(API_BASE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  return response.json();
+}
 
 /**
  * Store uploaded data to Google Sheets
  */
 export function storeUploadedData(fileName, dataType, rawData, processedData, metadata = {}) {
   const runner = getGoogleScriptRunner();
-  if (runner) {
 
-    
+  if (runner) {
     return promisifyGasCall('storeUploadedData', fileName, dataType, rawData, processedData, metadata)
-      .then(result => {
+      .then((result) => {
         if (!result.success) throw new Error(result.error || 'Failed to store data');
         return result;
       });
   }
-  
-  return fetch(API_BASE_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      action: 'storeData',
-      fileName,
-      dataType,
-      rawData,
-      processedData,
-      metadata
-    })
-  })
-  .then(response => response.json())
-  .then(data => {
+
+  return postApi({
+    action: 'storeData',
+    fileName,
+    dataType,
+    rawData,
+    processedData,
+    metadata
+  }).then((data) => {
     if (!data.success) throw new Error(data.error || 'Failed to store data');
     return data;
   });
 }
 
 /**
- * Retrieve user's uploaded data from Google Sheets
+ * Retrieve uploaded data summary.
+ * includeAll=true means global scope (all users).
  */
-export function getUserUploadedData(limit = 20, dataType = '') {
-  const runner = getGoogleScriptRunner();
-  
-  if (runner) {
-    return promisifyGasCall('getUserUploadedData', limit, dataType)
-      .then(result => {
-        if (!result.success) throw new Error(result.error || 'Failed to retrieve data');
-        return result.data;
-      });
-  }
-  
-  return fetch(API_BASE_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      action: 'getData',
-      limit,
-      dataType
-    })
-  })
-  .then(response => response.json())
-  .then(data => {
-    if (!data.success) throw new Error(data.error || 'Failed to retrieve data');
-    return data.data;
-  });
-}
-
-/**
- * Retrieve summary of user's uploaded data (Filtered by Dashboard)
- */
-export function getUserUploadedDataSummary(limit = 20, dataType = '') {
+export function getUserUploadedDataSummary(limit = 50, dataType = '', includeAll = false) {
   const runner = getGoogleScriptRunner();
 
   if (runner) {
-    return promisifyGasCall('getUserUploadedDataSummary', limit, dataType)
-      .then(result => {
+    const fnName = includeAll ? 'getUploadedDataSummary' : 'getUserUploadedDataSummary';
+    return promisifyGasCall(fnName, limit, dataType, includeAll)
+      .then((result) => {
         if (!result.success) throw new Error(result.error || 'Failed to retrieve data summary');
         return result.data;
       });
   }
 
-  return fetch(API_BASE_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      action: 'getDataSummary',
-      limit,
-      dataType
-    })
-  })
-  .then(response => response.json())
-  .then(data => {
+  return postApi({
+    action: 'getDataSummary',
+    limit,
+    dataType,
+    includeAll
+  }).then((data) => {
     if (!data.success) throw new Error(data.error || 'Failed to retrieve data summary');
     return data.data;
   });
 }
 
 /**
- * Retrieve specific data entry by ID
+ * Retrieve specific data entry by ID.
+ * includeAll=true allows loading globally shared history entries.
  */
-export function getUploadedDataById(dataId) {
+export function getUploadedDataById(dataId, includeAll = false, dataType = '') {
   const runner = getGoogleScriptRunner();
 
   if (runner) {
-    return promisifyGasCall('getUploadedDataById', dataId)
-      .then(result => {
+    return promisifyGasCall('getUploadedDataById', dataId, includeAll, dataType)
+      .then((result) => {
         if (!result.success) throw new Error(result.error || 'Failed to retrieve stored data');
         return result.data;
       });
   }
 
-  return fetch(API_BASE_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      action: 'getDataById',
-      dataId
-    })
-  })
-  .then(response => response.json())
-  .then(data => {
+  return postApi({
+    action: 'getDataById',
+    dataId,
+    includeAll,
+    dataType
+  }).then((data) => {
     if (!data.success) throw new Error(data.error || 'Failed to retrieve stored data');
     return data.data;
   });
 }
 
 /**
- * Retrieve the absolute latest data entry (Filtered by Dashboard)
+ * Retrieve the latest stored data for the current user (per-user scope).
  */
 export function getLatestUserUploadedData(dataType = '') {
   const runner = getGoogleScriptRunner();
 
   if (runner) {
     return promisifyGasCall('getLatestUserUploadedData', dataType)
-      .then(result => {
+      .then((result) => {
         if (!result.success) throw new Error(result.error || 'Failed to retrieve latest stored data');
         return result.data;
       });
   }
 
-  return fetch(API_BASE_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      action: 'getLatestData',
-      dataType
-    })
-  })
-  .then(response => response.json())
-  .then(data => {
+  return postApi({
+    action: 'getLatestData',
+    dataType
+  }).then((data) => {
     if (!data.success) throw new Error(data.error || 'Failed to retrieve latest stored data');
     return data.data;
   });
@@ -191,25 +151,19 @@ export function getLatestUserUploadedData(dataType = '') {
  */
 export function deleteUploadedData(dataId) {
   const runner = getGoogleScriptRunner();
-  
+
   if (runner) {
     return promisifyGasCall('deleteUploadedData', dataId)
-      .then(result => {
+      .then((result) => {
         if (!result.success) throw new Error(result.error || 'Failed to delete data');
         return result;
       });
   }
-  
-  return fetch(API_BASE_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      action: 'deleteData',
-      dataId
-    })
-  })
-  .then(response => response.json())
-  .then(data => {
+
+  return postApi({
+    action: 'deleteData',
+    dataId
+  }).then((data) => {
     if (!data.success) throw new Error(data.error || 'Failed to delete data');
     return data;
   });
@@ -220,53 +174,39 @@ export function deleteUploadedData(dataId) {
  */
 export function getUserInfo() {
   const runner = getGoogleScriptRunner();
-  
+
   if (runner) {
     return promisifyGasCall('getUserInfo')
-      .then(result => {
+      .then((result) => {
         if (!result.success) throw new Error(result.error || 'Failed to get user info');
         return result.data;
       });
   }
-  
-  return fetch(API_BASE_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      action: 'getUserInfo'
-    })
-  })
-  .then(response => response.json())
-  .then(data => {
+
+  return postApi({ action: 'getUserInfo' }).then((data) => {
     if (!data.success) throw new Error(data.error || 'Failed to get user info');
     return data.data;
   });
 }
 
 /**
- * Get last modified information (Filtered by Dashboard)
+ * Get last modified information (dashboard-level)
  */
 export function getLastModifiedInfo(dataType = '') {
   const runner = getGoogleScriptRunner();
-  
+
   if (runner) {
     return promisifyGasCall('getLastModifiedInfo', dataType)
-      .then(result => {
+      .then((result) => {
         if (!result.success) throw new Error(result.error || 'Failed to get last modified info');
         return result.data;
       });
   }
-  
-  return fetch(API_BASE_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      action: 'getLastModified',
-      dataType
-    })
-  })
-  .then(response => response.json())
-  .then(data => {
+
+  return postApi({
+    action: 'getLastModified',
+    dataType
+  }).then((data) => {
     if (!data.success) throw new Error(data.error || 'Failed to get last modified info');
     return data.data;
   });
