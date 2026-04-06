@@ -1,4 +1,4 @@
-﻿import { useState, useMemo, useEffect, useRef } from 'react';
+﻿import { useState, useMemo, useEffect, useRef, useDeferredValue } from 'react';
 import useDarkMode from '../../hooks/useDarkMode';
 import useSearchDebounce from '../../hooks/useSearchDebounce';
 import { processWirelessAlarms, processTransportAlarms } from '../../services/dataGrouper';
@@ -19,7 +19,7 @@ import fileLight from '../../assets/fileLight.png';
 import warningDark from '../../assets/warningDark.png';
 
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Cell, Rectangle } from 'recharts';
-import { FixedSizeList as List, VariableSizeList } from 'react-window'; // 🚀 THE CRASH FIX IMPORT!
+import { FixedSizeList as List, VariableSizeList } from 'react-window'; // ?? THE CRASH FIX IMPORT!
 
 import * as XLSX from 'xlsx';
 import { useNavigate } from "react-router-dom";
@@ -27,6 +27,7 @@ import { useNavigate } from "react-router-dom";
 import { parseLocationData, getShortRegionByProvince } from '../../utils/telecom';
 import { cityToProvinceMap } from '../MapDictionary/TelecomDictionaries';
 import DashboardLayout from '../../components/DashboardLayout';
+import DashboardHeaderActions from '../../components/common/DashboardHeaderActions';
 import { ThemedButton, ThemedBadge } from '../../components/common';
 import '../../styles/Dashboard_styles.css';
 
@@ -42,7 +43,7 @@ export default function SADashboard() {
 
   const navigate = useNavigate();
   const [isDarkMode, toggleTheme] = useDarkMode();
-  const { searchTerm, setSearchTerm, debouncedTerm } = useSearchDebounce();
+  const { searchTerm, setSearchTerm, debouncedTerm, isPending: isSearchPending } = useSearchDebounce();
 
   const [selectedRowDetails, setSelectedRowDetails] = useState(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -102,9 +103,15 @@ export default function SADashboard() {
   const [userInfo, setUserInfo] = useState(null);
   const [lastModifiedInfo, setLastModifiedInfo] = useState(null);
   const [mainListSize, setMainListSize] = useState({ width: '100%', height: 600 });
+  const [workerFilteredIndices, setWorkerFilteredIndices] = useState([]);
+  const [workerReady, setWorkerReady] = useState(false);
+  const [isWorkerBusy, setIsWorkerBusy] = useState(false);
   const monitorFile1Ref = useRef(null);
   const monitorFile2Ref = useRef(null);
   const listContainerRef = useRef(null);
+  const filterWorkerRef = useRef(null);
+  const filterRequestIdRef = useRef(0);
+  const workerPerfRef = useRef(new Map());
 
   const CHART_COLORS = ['#8a2be2', '#1a73e8', '#00bfa5', '#f0a500', '#f02849'];
   const currentLogo = isDarkMode ? globeLogoDark : globeLogoLight;
@@ -146,7 +153,7 @@ export default function SADashboard() {
 
       localStorage.setItem(cacheKey, JSON.stringify({ ...cachePayload, timestamp: Date.now() }));
     } catch (error) {
-      console.warn("⚠️ Cache Write Failed:", error);
+      console.warn("?? Cache Write Failed:", error);
       localStorage.removeItem(cacheKey); 
     }
   };
@@ -165,7 +172,7 @@ useEffect(() => {
       // 1. INSTANT CACHE LOAD
       const cached = readCache();
       if (cached && isMounted) {
-        setUserInfo(cached.userInfo || null); // 🚀 ADDED: Load user from cache
+        setUserInfo(cached.userInfo || null); // ?? ADDED: Load user from cache
         setStoredData(cached.storedData || []);
         setLastModifiedInfo(cached.lastModifiedInfo || null);
         if (cached.latestStoredData) {
@@ -176,7 +183,7 @@ useEffect(() => {
 
       try {
         setIsRefreshingSavedData(true);
-        // 🚀 ADDED: Fetch getUserInfo() from Google Apps Script
+        // ?? ADDED: Fetch getUserInfo() from Google Apps Script
         const [userData, storedDataList, latestStoredData, lastModified] = await Promise.all([
           getUserInfo(), 
           getUserUploadedDataSummary(10, dashboardMode),
@@ -185,7 +192,7 @@ useEffect(() => {
         ]);
         
         if (isMounted) {
-          setUserInfo(userData); // 🚀 ADDED: Set the React state with your Google Identity
+          setUserInfo(userData); // ?? ADDED: Set the React state with your Google Identity
           setStoredData(storedDataList);
           setLastModifiedInfo(lastModified);
           if (latestStoredData) {
@@ -193,7 +200,7 @@ useEffect(() => {
           }
           
           writeCache({
-            userInfo: userData, // 🚀 ADDED: Save user to cache for seamless switching
+            userInfo: userData, // ?? ADDED: Save user to cache for seamless switching
             storedData: storedDataList,
             lastModifiedInfo: lastModified,
             latestStoredData: latestStoredData || null
@@ -229,6 +236,55 @@ useEffect(() => {
     return () => observer.disconnect();
   }, [results]);
 
+  useEffect(() => {
+    if (typeof Worker === 'undefined') {
+      setWorkerReady(false);
+      return undefined;
+    }
+
+    const worker = new Worker(new URL('../../workers/tableFilter.worker.js', import.meta.url), { type: 'module' });
+    filterWorkerRef.current = worker;
+    setWorkerReady(true);
+
+    worker.onmessage = (event) => {
+      const payload = event.data || {};
+      const perfMeta = workerPerfRef.current.get(payload.requestId);
+      if (perfMeta) {
+        workerPerfRef.current.delete(payload.requestId);
+      }
+      if (payload.type === 'RESULT_SITE' && payload.requestId === filterRequestIdRef.current) {
+        if (perfMeta) {
+          const durationMs = performance.now() - perfMeta.startedAt;
+          console.info(
+            `[Perf][SiteAlert][Worker] ${durationMs.toFixed(1)}ms | rows=${perfMeta.rowCount} | matched=${Array.isArray(payload.indices) ? payload.indices.length : 0} | term="${perfMeta.term}"`
+          );
+        }
+        setWorkerFilteredIndices(Array.isArray(payload.indices) ? payload.indices : []);
+        setIsWorkerBusy(false);
+      }
+      if (payload.type === 'WORKER_ERROR' && payload.requestId === filterRequestIdRef.current) {
+        if (perfMeta) {
+          const durationMs = performance.now() - perfMeta.startedAt;
+          console.warn(
+            `[Perf][SiteAlert][Worker][Error] ${durationMs.toFixed(1)}ms | rows=${perfMeta.rowCount} | term="${perfMeta.term}"`
+          );
+        }
+        setIsWorkerBusy(false);
+      }
+    };
+
+    worker.onerror = () => {
+      setWorkerReady(false);
+      setIsWorkerBusy(false);
+    };
+
+    return () => {
+      worker.terminate();
+      filterWorkerRef.current = null;
+      setWorkerReady(false);
+    };
+  }, []);
+
   const viewOrder = ['input', 'analytics', 'details', 'history'];
 
   const handleSidebarViewChange = (view) => {
@@ -253,7 +309,7 @@ useEffect(() => {
       position: 'absolute',
       inset: 0,
       padding: '12px',
-      overflow: 'hidden', // 🚀 LOCKED SCROLLBAR FIX
+      overflow: 'hidden', // ?? LOCKED SCROLLBAR FIX
       transition: 'transform 0.35s ease, opacity 0.35s ease',
       background: 'var(--bg-secondary)'
     };
@@ -378,7 +434,7 @@ useEffect(() => {
         result = processTransportAlarms(nmsData);
       }
 
-      // 🚀 2. THE UNIVERSAL SAFE MAPPER (Fixes the NaN Crash)
+      // ?? 2. THE UNIVERSAL SAFE MAPPER (Fixes the NaN Crash)
       const rawDataArray = Array.isArray(result?.data) ? result.data : [];
       const safeProcessedData = rawDataArray.map((item) => ({
         alert: item.alert || item.alarm || "N/A",
@@ -622,16 +678,53 @@ useEffect(() => {
     return [...results].sort((a,b) => b.count - a.count).slice(0, 50); 
   }, [results, selectedGraphAlarm]);
 
-  const filteredResults = useMemo(() => {
-    const term = String(debouncedTerm || '').toLowerCase();
+  const deferredSearchTerm = useDeferredValue(debouncedTerm);
+
+  const fallbackFilteredResults = useMemo(() => {
+    // Fallback path for environments where Web Workers are unavailable.
+    if (workerReady) return [];
+    const term = String(deferredSearchTerm || '').toLowerCase().trim();
     if (!term) return results;
-    
-    return results.filter(row => {
-      return [row.alert, row.name, row.dn, row.pla, row.li, row.sn]
+
+    return results.filter((row) => {
+      const searchable = [row.alert, row.name, row.dn, row.pla, row.li, row.sn]
         .filter(Boolean)
-        .some(value => String(value).toLowerCase().includes(term));
+        .map((value) => String(value).toLowerCase())
+        .join(' ');
+      return searchable.includes(term);
     });
-  }, [results, debouncedTerm]);
+  }, [results, deferredSearchTerm, workerReady]);
+
+  useEffect(() => {
+    if (!workerReady || !filterWorkerRef.current) return;
+    filterWorkerRef.current.postMessage({ type: 'INIT_SITE', rows: results });
+  }, [results, workerReady]);
+
+  useEffect(() => {
+    if (!workerReady || !filterWorkerRef.current) return;
+    const requestId = ++filterRequestIdRef.current;
+    const term = String(deferredSearchTerm || '');
+    workerPerfRef.current.set(requestId, {
+      startedAt: performance.now(),
+      rowCount: results.length,
+      term
+    });
+    setIsWorkerBusy(true);
+    filterWorkerRef.current.postMessage({
+      type: 'QUERY_SITE',
+      requestId,
+      term
+    });
+  }, [workerReady, deferredSearchTerm, results.length]);
+
+  const filteredResults = useMemo(() => {
+    if (!workerReady) return fallbackFilteredResults;
+    return workerFilteredIndices
+      .map((index) => results[index])
+      .filter(Boolean);
+  }, [workerReady, fallbackFilteredResults, workerFilteredIndices, results]);
+
+  const isSearchUpdating = isSearchPending || deferredSearchTerm !== debouncedTerm || isWorkerBusy;
 
   const openGraphModal = () => {
     if (expandBtnRef.current) {
@@ -795,7 +888,7 @@ useEffect(() => {
     return null;
   };
 
-  // 🚀 1. ALL VARIABLES MUST BE DEFINED FIRST
+  // ?? 1. ALL VARIABLES MUST BE DEFINED FIRST
   const currentUserName = userInfo?.displayName || userInfo?.name || "Unknown User";
   const currentUserEmail = userInfo?.userId || "user@globe.com.ph"; 
   const myProcessedData = storedData ? storedData.filter(item => item.userId === currentUserEmail) : [];
@@ -809,197 +902,33 @@ useEffect(() => {
     ? new Date(lastModifiedInfo.timestamp).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
     : "No previous sync";
 
-  // 🚀 2. HEADER ACTIONS CREATED SECOND (Now it can safely read the variables above!)
-  const headerActions = (
-    <div className="header-actions" style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', paddingLeft: '16px' }}>
-      <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', minWidth: 0, maxWidth: '280px' }}>
-        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', lineHeight: 1.2 }}>
-          Last Modified:
-        </span>
-        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {lastModifiedName ? `${lastModifiedTimestamp} | ${lastModifiedName}` : lastModifiedTimestamp}
-        </span>
-      </div>
+  // ?? 2. HEADER ACTIONS CREATED SECOND (Now it can safely read the variables above!)
+const exportOptions = [
+  { label: 'Full Export', value: 'ALL' }
+];
 
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 0, flex: 1 }} />
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-        <div className="export-dropdown-container" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setShowExportMenu(false); }} tabIndex={-1} style={{ position: 'relative' }}>
-          <button className="btn theme-toggle" onClick={() => setShowExportMenu(!showExportMenu)} disabled={results?.length === 0} style={{
-            width: '36px', height: '36px', borderRadius: '50%', padding: 0,
-            background: 'var(--bg-input)', border: '1px solid var(--border-light)',
-            color: 'var(--text-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            cursor: results?.length === 0 ? 'not-allowed' : 'pointer',
-            opacity: results?.length === 0 ? 0.5 : 1, transition: 'all 0.2s ease', outline: 'none'
-          }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 5v9" />
-              <polyline points="8 11 12 15 16 11" />
-              <path d="M6 18h12" />
-            </svg>
-          </button>
-          {showExportMenu && (
-            <div className="export-menu" style={{ position: 'absolute', top: '110%', left: 0, zIndex: 50 }}>
-              <button onClick={() => handleSpecificExport('ALL')}>Full Export</button>
-            </div>
-          )}
-        </div>
-        <button className="btn theme-toggle" onClick={toggleTheme} title="Toggle Theme" style={{
-          width: '36px', height: '36px', borderRadius: '50%', padding: 0,
-          background: 'var(--bg-input)', border: '1px solid var(--border-light)',
-          color: 'var(--text-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          cursor: 'pointer', transition: 'all 0.2s ease', outline: 'none'
-        }}>
-          {isDarkMode ? (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
-          ) : (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
-          )}
-        </button>
-        
-        <div style={{ width: '1px', height: '24px', background: 'rgba(128, 128, 128, 0.4)' }} />
-        
-        {/* 🚀 THE GOOGLE-STYLE PROFILE DROPDOWN */}
-        <div style={{ position: 'relative' }}>
-          
-          {/* TRIGGER BUTTON */}
-          <button 
-            className="user-profile-trigger"
-            onClick={() => setShowUserDropdown(!showUserDropdown)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: '10px', background: 'transparent',
-              border: 'none', outline: 'none', cursor: 'pointer', textAlign: 'left', 
-              padding: '4px 8px', borderRadius: '8px', transition: 'background 0.2s'
-            }}
-          >
-            <div title={engineerName} style={{
-              width: '38px', height: '38px', borderRadius: '50%',
-              background: 'linear-gradient(135deg, var(--brand-purple), #6b21a8)',
-              color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontWeight: 'bold', fontSize: '1.1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
-            }}>
-              {userInitial}
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', lineHeight: '1.2', minWidth: 0 }}>
-              <span style={{ fontWeight: '700', fontSize: '0.85rem', color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '150px' }}>
-                {engineerName}
-              </span>
-              <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '150px' }}>
-                {currentUserEmail}
-              </span>
-            </div>
-          </button>
-
-          {/* THE THEMED DROPDOWN MENU */}
-          {showUserDropdown && (
-            <>
-              {/* Invisible Overlay for closing */}
-              <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999 }} onClick={(e) => { e.stopPropagation(); setShowUserDropdown(false); }} />
-
-              <div style={{ 
-                position: 'absolute', top: '110%', right: 0, zIndex: 1000, width: '360px', 
-                background: 'var(--bg-card)', 
-                backdropFilter: 'var(--glass-blur)',
-                WebkitBackdropFilter: 'var(--glass-blur)',
-                border: '1px solid var(--border-light)', 
-                borderRadius: '24px', boxShadow: 'var(--shadow-hover)', 
-                padding: '16px', color: 'var(--text-primary)', fontFamily: '"Google Sans", Roboto, Arial, sans-serif'
-              }}>
-                
-                {/* Header Row */}
-                <div style={{ position: 'relative', textAlign: 'center', marginBottom: '16px' }}>
-                  <div style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: '500' }}>{currentUserEmail}</div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>Managed by Globe RSC</div>
-                  <button onClick={() => setShowUserDropdown(false)} style={{ position: 'absolute', right: '0', top: '-4px', background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.2rem', outline: 'none' }}>✕</button>
-                </div>
-
-                {/* Big Avatar with Camera Icon */}
-                <div style={{ position: 'relative', width: '76px', height: '76px', margin: '0 auto 12px auto' }}>
-                  <div style={{ 
-                    width: '100%', height: '100%', borderRadius: '50%', background: 'linear-gradient(135deg, var(--brand-purple), #6b21a8)', 
-                    color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '2rem',
-                    boxShadow: '0 4px 10px rgba(0,0,0,0.2)'
-                  }}>
-                    {userInitial}
-                  </div>
-                  {/* Camera Badge Overlay */}
-                  <div style={{ 
-                    position: 'absolute', bottom: '0', right: '0', background: 'var(--bg-input)', borderRadius: '50%', 
-                    width: '24px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid var(--bg-card)' 
-                  }}>
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--text-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
-                  </div>
-                </div>
-
-                {/* Greeting & Manage Button */}
-                <div style={{ textAlign: 'center', fontSize: '1.4rem', marginBottom: '16px', color: 'var(--text-primary)' }}>Hi, {firstName}!</div>
-                <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '24px' }}>
-                 <button 
-                    onClick={() => {
-                      setShowUserDropdown(false);
-                      // Opens the actual Google Workspace account manager in a new tab
-                      window.open('https://myaccount.google.com/', '_blank'); 
-                    }}
-                    className="primary-outline" 
-                    style={{ borderRadius: '100px', padding: '8px 24px', fontSize: '0.85rem', fontWeight: '500', cursor: 'pointer', transition: 'all 0.2s' }}
-                  >
-                    Manage your Google Account
-                  </button>
-                </div>
-
-                <div className="custom-scrollbar" style={{ maxHeight: '220px', overflowY: 'auto' }}>
-                      {/* 🚀 NOW USING YOUR PERSONAL FILTERED DATA */}
-                      {myProcessedData.length > 0 ? myProcessedData.slice(0, 5).map((item, index) => (
-                        <button 
-                          key={item.id} 
-                          onClick={() => { handleLoadStoredData(item); setShowUserDropdown(false); }} 
-                          className="row-hover"
-                          style={{ 
-                            width: '100%', background: 'transparent', border: 'none', borderBottom: index === Math.min(myProcessedData.length, 5) - 1 ? 'none' : '1px solid var(--border-light)',
-                            padding: '14px 16px', display: 'flex', alignItems: 'center', gap: '16px', cursor: 'pointer', textAlign: 'left', transition: 'background 0.2s' 
-                          }}
-                        >
-                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
-                          
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.fileName}</div>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>{new Date(item.uploadDate).toLocaleDateString()} • <span style={{ color: 'var(--color-info)' }}>{item.processedCount ?? item.metadata?.processedRecords ?? 0} rows</span></div>
-                          </div>
-                        </button>
-                      )) : (
-                        <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                          You haven't processed any files recently.
-                        </div>
-                      )}
-                    </div>
-
-                {/* Footer Links */}
-                <div style={{ textAlign: 'center', marginTop: '16px', padding: '12px 0 4px 0', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                  <a
-                    href="https://policies.google.com/privacy?hl=en"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ color: 'var(--text-secondary)', textDecoration: 'none' }}
-                  >
-                    Privacy Policy
-                  </a>
-                  &nbsp;•&nbsp;
-                  <a
-                    href="https://policies.google.com/terms?hl=en"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ color: 'var(--text-secondary)', textDecoration: 'none' }}
-                  >
-                    Terms of Service
-                  </a>
-                </div>
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+const headerActions = (
+  <DashboardHeaderActions
+    lastModifiedText={lastModifiedName ? `${lastModifiedTimestamp} | ${lastModifiedName}` : lastModifiedTimestamp}
+    exportDisabled={results?.length === 0}
+    showExportMenu={showExportMenu}
+    onToggleExport={() => setShowExportMenu(!showExportMenu)}
+    onCloseExport={() => setShowExportMenu(false)}
+    exportOptions={exportOptions}
+    onSelectExport={(value) => handleSpecificExport(value)}
+    isDarkMode={isDarkMode}
+    onToggleTheme={toggleTheme}
+    showUserDropdown={showUserDropdown}
+    onToggleUserDropdown={() => setShowUserDropdown(!showUserDropdown)}
+    onCloseUserDropdown={() => setShowUserDropdown(false)}
+    userName={engineerName}
+    userEmail={currentUserEmail}
+    userInitial={userInitial}
+    firstName={firstName}
+    recentItems={myProcessedData}
+    onLoadRecentItem={handleLoadStoredData}
+  />
+);
 
   return (
     <DashboardLayout isLoading={isLoading || isInitialDataLoading} logo={currentLogo} onLogoClick={() => navigate("/")} headerActions={headerActions}>
@@ -1013,7 +942,7 @@ useEffect(() => {
       <main className="main-layout" style={{ display: 'flex', overflow: 'hidden', transition: 'gap 0.4s cubic-bezier(0.4, 0, 0.2, 1)', gap: isSidebarCollapsed ? '0px' : '' }}>
         <aside className="sidebar" style={{ width: isSidebarCollapsed ? '0px' : '320px', minWidth: isSidebarCollapsed ? '0px' : '320px', overflow: 'hidden', transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)', borderRight: isSidebarCollapsed ? 'none' : '1px solid var(--border-light)', opacity: isSidebarCollapsed ? 0 : 1, display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)' }}>
             
-          {/* 🚀 THE MODERN HORIZONTAL TAB BAR (Using CSS Classes) */}
+          {/* ?? THE MODERN HORIZONTAL TAB BAR (Using CSS Classes) */}
             <div className="sa-sidebar-tabs-wrap">
               <div className="sa-sidebar-tabs">
                 
@@ -1104,7 +1033,7 @@ useEffect(() => {
                     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
                         <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'var(--text-primary)' }}>Top Alarms</h3>
-                        <button ref={expandBtnRef} onClick={openGraphModal} style={{ background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--color-info)', fontSize: '0.75rem', fontWeight: 'bold', cursor: 'pointer', padding: '5px 10px', borderRadius: '4px', outline: 'none' }}>Expand 📈</button>
+                        <button ref={expandBtnRef} onClick={openGraphModal} style={{ background: 'var(--bg-input)', border: '1px solid var(--border-color)', color: 'var(--color-info)', fontSize: '0.75rem', fontWeight: 'bold', cursor: 'pointer', padding: '5px 10px', borderRadius: '4px', outline: 'none' }}>Expand</button>
                       </div>
                       <div className="custom-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto', overflowX: 'hidden', paddingRight: '5px' }}>
                         {alarmStats.map((stat, i) => ( 
@@ -1188,7 +1117,7 @@ useEffect(() => {
                       <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '5px' }}>Last Data Modification:</div>
                       <div style={{ fontWeight: 'bold', color: 'var(--color-danger)' }}>{lastModifiedName}</div>
                       <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                        {lastModifiedInfo.action} • {lastModifiedInfo.fileName}
+                        {lastModifiedInfo.action} Ã¢â‚¬Â¢ {lastModifiedInfo.fileName}
                       </div>
                       <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
                         {new Date(lastModifiedInfo.timestamp).toLocaleString()}
@@ -1218,7 +1147,7 @@ useEffect(() => {
 
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                               <div style={{ fontSize: '0.8rem', color: 'var(--color-info)' }}>
-                                {item.dataType} • {item.processedCount ?? item.metadata?.processedRecords ?? 0} results
+                                {item.dataType} Ã¢â‚¬Â¢ {item.processedCount ?? item.metadata?.processedRecords ?? 0} results
                               </div>
                               <div style={{ fontSize: '0.7rem', color: 'var(--bg-primary)', background: 'var(--text-primary)', fontWeight: 'bold', padding: '4px 10px', borderRadius: '12px' }}>
                                 Load Data
@@ -1230,7 +1159,7 @@ useEffect(() => {
                       </div>
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '200px', color: 'var(--text-secondary)' }}>
-                        <div style={{ fontSize: '2rem', marginBottom: '10px' }}>📁</div>
+                        <div style={{ fontSize: '2rem', marginBottom: '10px' }}>[📁]</div>
                         <div>No stored data found</div>
                         <div style={{ fontSize: '0.8rem', marginTop: '5px' }}>Process some data to see it here</div>
                       </div>
@@ -1244,17 +1173,20 @@ useEffect(() => {
 
         <section className="content-area" style={{ position: 'relative', flex: 1, minWidth: 0, transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)', marginLeft: isSidebarCollapsed ? '0px' : '', paddingLeft: isSidebarCollapsed ? '0px' : '' }}>
           <div className="output-card" style={{ display: 'flex', flexDirection: 'column', height: '100%', transition: 'padding 0.4s ease' }}>
-            <div className="table-toolbar" style={{ borderBottom: '1px solid var(--border-light)', background: 'var(--brand-purple)', color: 'white' }}>
-               <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+            <div className="table-toolbar" style={{ borderBottom: '1px solid var(--border-light)', background: 'var(--brand-purple)', color: 'white', flexWrap: 'wrap', gap: '12px' }}>
+               <div style={{ display: 'flex', alignItems: 'center', gap: '15px', flex: '1 1 auto', minWidth: 0 }}>
                   <button className="sidebar-toggle-btn" onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)} style={{ background: 'none', border: 'none', outline: 'none', color: 'var(--text-primary)', cursor: 'pointer', padding: '4px' }}>
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ transition: 'transform 0.3s ease', transform: isSidebarCollapsed ? 'rotate(180deg)' : 'rotate(0deg)' }}><polyline points="15 18 9 12 15 6"></polyline></svg>
                   </button>
                   <img src={warningDark} alt="Alerts" style={{ width: '24px' }} />
-                  <h2 style={{ margin: 0, fontSize: '1.2rem', color: 'var(--text-inverse)' }}>
+                  <h2 style={{ margin: 0, fontSize: '1.2rem', color: 'var(--text-inverse)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {dashboardMode === 'wireless' ? 'Wireless Critical Alerts' : 'Transport Critical Alerts'} ({filteredResults.length})
                   </h2>
                </div>
-              <input type="text" className="search-bar" placeholder="Search ID, Name, or Alarm..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} disabled={results.length === 0} style={{ outline: 'none' }}/>
+              <div style={{ position: 'relative', flex: '1 1 240px', minWidth: 0, maxWidth: '320px', width: '100%' }}>
+                <input type="text" className="search-bar" placeholder="Search ID, Name, or Alarm..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} disabled={results.length === 0} style={{ outline: 'none', width: '100%', boxSizing: 'border-box', paddingRight: '92px' }}/>
+                <span style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', fontSize: '0.75rem', color: 'var(--text-inverse)', opacity: isSearchUpdating ? 0.9 : 0, pointerEvents: 'none', transition: 'opacity 0.12s ease' }}>Searching...</span>
+              </div>
             </div>
 
             <div className="output-box" style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
@@ -1335,7 +1267,7 @@ useEffect(() => {
           <div className="theme-modal-card" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
             <div className="theme-modal-header">
               <h3>{themeModal.title}</h3>
-              <button className="theme-modal-close" onClick={handleThemeModalCancel} aria-label="Close">×</button>
+              <button className="theme-modal-close" onClick={handleThemeModalCancel} aria-label="Close">x</button>
             </div>
             <div className="theme-modal-body">
               <p>{themeModal.message}</p>
@@ -1374,7 +1306,7 @@ useEffect(() => {
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
                 <div style={{ background: 'white', color: isDarkMode ? 'var(--color-danger)' : 'var(--color-danger)', padding: '5px 15px', borderRadius: '20px', fontWeight: 'bold' }}>{filteredModalRows.length} Occurrences</div>
-                <button onClick={closeDrillDownModal} style={{ background: 'transparent', border: 'none', color: 'white', fontSize: '1.5rem', cursor: 'pointer', outline: 'none' }}>✕</button>
+                <button onClick={closeDrillDownModal} style={{ background: 'transparent', border: 'none', color: 'white', fontSize: '1.5rem', cursor: 'pointer', outline: 'none', marginBottom: '10px' }}>x</button>
               </div>
             </div>
             
@@ -1402,7 +1334,7 @@ useEffect(() => {
           <div className="map-modal-content" onClick={e => e.stopPropagation()} style={{ width: '80%', height: '85%', display: 'flex', flexDirection: 'column', background: 'var(--bg-primary)', borderRadius: '16px', overflow: 'hidden', transformOrigin: graphModalOrigin, transform: isGraphModalVisible ? 'scale(1) translateY(0)' : 'scale(0.05) translateY(50px)', opacity: isGraphModalVisible ? 1 : 0, transition: 'transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.3s ease', boxShadow: isGraphModalVisible ? (isDarkMode ? '0 25px 50px -12px rgba(0, 0, 0, 0.9)' : '0 25px 50px -12px rgba(0, 0, 0, 0.5)') : 'none' }}>
             <div className="map-modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--brand-gradient)', color: 'white', padding: '15px 30px' }}>
               <div><h3 style={{ margin: 0, fontSize: '1.4rem', color: 'white' }}>Enterprise Analytics Overview</h3></div>
-              <button onClick={closeGraphModal} style={{ background: 'transparent', border: 'none', color: 'white', fontSize: '1.5rem', cursor: 'pointer', outline: 'none' }}>✕</button>
+              <button onClick={closeGraphModal} style={{ background: 'transparent', border: 'none', color: 'white', fontSize: '1.5rem', cursor: 'pointer', outline: 'none', marginBottom: '10px' }}>x</button>
             </div>
             
             <div className="custom-scrollbar" style={{ flex: 1, padding: '25px', display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
@@ -1470,7 +1402,7 @@ useEffect(() => {
                     </h4>
                     {selectedGraphAlarm && (
                       <button onClick={() => setSelectedGraphAlarm(null)} style={{ padding: '6px 12px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)', borderRadius: '6px', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 'bold', outline: 'none' }}>
-                        Clear Filter ✕
+                        Clear Filter ?
                       </button>
                     )}
                   </div>
@@ -1507,3 +1439,6 @@ useEffect(() => {
     </DashboardLayout>
   );
 }
+
+
+

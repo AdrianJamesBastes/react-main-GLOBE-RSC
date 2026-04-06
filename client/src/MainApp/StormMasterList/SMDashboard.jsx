@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect, useRef, useDeferredValue } from 'react';
 import useDarkMode from '../../hooks/useDarkMode';
 import useSearchDebounce from '../../hooks/useSearchDebounce';
 import AnalyticsDashboard from '../../Dashboard/AnalyticsDashboard';
@@ -25,6 +25,7 @@ import { FixedSizeList as List } from 'react-window';
 import { parseLocationData, getShortRegionByProvince } from '../../utils/telecom';
 import { cityToProvinceMap } from '../MapDictionary/TelecomDictionaries';
 import DashboardLayout from '../../components/DashboardLayout';
+import DashboardHeaderActions from '../../components/common/DashboardHeaderActions';
 import useStormMasterlistProcessor from '../../features/storm-masterlist/hooks/useStormMasterlistProcessor';
 import { exportStormMasterlist } from '../../features/storm-masterlist/services/stormMasterlistExport';
 import {
@@ -56,7 +57,7 @@ export default function SMDashboard() {
 
   const navigate = useNavigate();
   const [isDarkMode, toggleTheme] = useDarkMode();
-  const { searchTerm, setSearchTerm } = useSearchDebounce();
+  const { searchTerm, setSearchTerm, debouncedTerm, isPending: isSearchPending } = useSearchDebounce();
   const { isLoading, isAiLoading, scanFiles, runAiCommand } = useStormMasterlistProcessor();
   const [isAiLoadingFallback, setIsAiLoadingFallback] = useState(false);
   const isAiLoadingVisible = isAiLoading || isAiLoadingFallback;
@@ -76,6 +77,10 @@ export default function SMDashboard() {
   const [showBigMap, setShowBigMap] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [selectedRowDetails, setSelectedRowDetails] = useState(null);
+  const [mainListSize, setMainListSize] = useState({ width: '100%', height: 600 });
+  const [workerFilteredIndices, setWorkerFilteredIndices] = useState([]);
+  const [workerReady, setWorkerReady] = useState(false);
+  const [isWorkerBusy, setIsWorkerBusy] = useState(false);
 
   const [aiCommand, setAiCommand] = useState("");
   const [showAiPanel, setShowAiPanel] = useState(false);
@@ -149,7 +154,7 @@ export default function SMDashboard() {
           }
           localStorage.setItem(CACHE_KEY, JSON.stringify({ ...cachePayload, timestamp: Date.now() }));
         } catch (error) {
-          console.warn("⚠️ SM Cache Write Failed (Likely Exceeded 5MB limit):", error);
+          console.warn("SM Cache Write Failed (Likely Exceeded 5MB limit):", error);
           // Failsafe: Clear the bloated cache so it doesn't corrupt the app on next load
           localStorage.removeItem(CACHE_KEY);
         }
@@ -160,6 +165,10 @@ export default function SMDashboard() {
   ]);
   const chatContainerRef = useRef(null);
   const sidebarTopRef = useRef(null);
+  const listContainerRef = useRef(null);
+  const filterWorkerRef = useRef(null);
+  const filterRequestIdRef = useRef(0);
+  const workerPerfRef = useRef(new Map());
 
   const currentLogo = isDarkMode ? globeLogoDark : globeLogoLight;
 
@@ -168,6 +177,71 @@ export default function SMDashboard() {
       sidebarTopRef.current.scrollLeft = 0;
     }
   }, [showHistoryPanel, selectedRowDetails]);
+
+  useEffect(() => {
+    if (!listContainerRef.current || typeof ResizeObserver === 'undefined') return;
+
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setMainListSize({
+          width: entry.contentRect.width,
+          height: entry.contentRect.height
+        });
+      }
+    });
+
+    observer.observe(listContainerRef.current);
+    return () => observer.disconnect();
+  }, [results.length]);
+
+  useEffect(() => {
+    if (typeof Worker === 'undefined') {
+      setWorkerReady(false);
+      return undefined;
+    }
+
+    const worker = new Worker(new URL('../../workers/tableFilter.worker.js', import.meta.url), { type: 'module' });
+    filterWorkerRef.current = worker;
+    setWorkerReady(true);
+
+    worker.onmessage = (event) => {
+      const payload = event.data || {};
+      const perfMeta = workerPerfRef.current.get(payload.requestId);
+      if (perfMeta) {
+        workerPerfRef.current.delete(payload.requestId);
+      }
+      if (payload.type === 'RESULT_STORM' && payload.requestId === filterRequestIdRef.current) {
+        if (perfMeta) {
+          const durationMs = performance.now() - perfMeta.startedAt;
+          console.info(
+            `[Perf][Storm][Worker] ${durationMs.toFixed(1)}ms | rows=${perfMeta.rowCount} | matched=${Array.isArray(payload.indices) ? payload.indices.length : 0} | term="${perfMeta.term}" | filter=${perfMeta.filterStatus}`
+          );
+        }
+        setWorkerFilteredIndices(Array.isArray(payload.indices) ? payload.indices : []);
+        setIsWorkerBusy(false);
+      }
+      if (payload.type === 'WORKER_ERROR' && payload.requestId === filterRequestIdRef.current) {
+        if (perfMeta) {
+          const durationMs = performance.now() - perfMeta.startedAt;
+          console.warn(
+            `[Perf][Storm][Worker][Error] ${durationMs.toFixed(1)}ms | rows=${perfMeta.rowCount} | term="${perfMeta.term}" | filter=${perfMeta.filterStatus}`
+          );
+        }
+        setIsWorkerBusy(false);
+      }
+    };
+
+    worker.onerror = () => {
+      setWorkerReady(false);
+      setIsWorkerBusy(false);
+    };
+
+    return () => {
+      worker.terminate();
+      filterWorkerRef.current = null;
+      setWorkerReady(false);
+    };
+  }, []);
 
  // Load user info and stored data on mount
   useEffect(() => {
@@ -283,12 +357,12 @@ export default function SMDashboard() {
           setIsAiLoadingFallback(false);
           
           if (!aiResponse) {
-            setChatHistory(prev => [...prev, { sender: 'system', text: "âš ï¸ AI returned an empty response.", isError: true }]);
+            setChatHistory(prev => [...prev, { sender: 'system', text: "AI returned an empty response.", isError: true }]);
             return;
           }
 
           if (aiResponse.error) {
-            setChatHistory(prev => [...prev, { sender: 'system', text: `âš ï¸ System Error: ${aiResponse.error}`, isError: true }]);
+            setChatHistory(prev => [...prev, { sender: 'system', text: `System Error: ${aiResponse.error}`, isError: true }]);
             return;
           }
           
@@ -297,7 +371,7 @@ export default function SMDashboard() {
           if (replyText) {
             setChatHistory(prev => [...prev, { sender: 'ai', text: replyText }]);
           } else if (!aiResponse.mutations || aiResponse.mutations.length === 0) {
-            setChatHistory(prev => [...prev, { sender: 'ai', text: `ðŸ¤– [Raw Output]: ${JSON.stringify(aiResponse)}` }]);
+            setChatHistory(prev => [...prev, { sender: 'ai', text: `[Raw Output]: ${JSON.stringify(aiResponse)}` }]);
           }
 
           if (aiResponse.mutations && Array.isArray(aiResponse.mutations) && aiResponse.mutations.length > 0) {
@@ -321,22 +395,22 @@ export default function SMDashboard() {
               
               if (actualChangesCount > 0) {
                 setResults(updatedResults);
-                setChatHistory(prev => [...prev, { sender: 'system', text: `âœ“ Successfully applied updates to ${actualChangesCount} rows.` }]);
+                setChatHistory(prev => [...prev, { sender: 'system', text: `Successfully applied updates to ${actualChangesCount} rows.` }]);
               }
             } catch {
-              setChatHistory(prev => [...prev, { sender: 'system', text: `âš ï¸ Table protected from corrupted AI data.`, isError: true }]);
+              setChatHistory(prev => [...prev, { sender: 'system', text: `Table protected from corrupted AI data.`, isError: true }]);
             }
           }
         })
         .withFailureHandler((err) => {
           setIsAiLoadingFallback(false);
-          setChatHistory(prev => [...prev, { sender: 'system', text: `âš ï¸ Network Timeout: ${err.message || err}`, isError: true }]);
+          setChatHistory(prev => [...prev, { sender: 'system', text: `Network Timeout: ${err.message || err}`, isError: true }]);
         })
         .processAIAgentCommand(userMessage, dataString);
     } else {
       setTimeout(() => {
         setIsAiLoadingFallback(false);
-        setChatHistory(prev => [...prev, { sender: 'ai', text: "I'm running locally. Google Apps Script is offline. ðŸ”Œ" }]);
+        setChatHistory(prev => [...prev, { sender: 'ai', text: "I'm running locally. Google Apps Script is offline." }]);
       }, 1000);
     }
     }
@@ -505,33 +579,70 @@ export default function SMDashboard() {
     };
   }, [results]);
 
-  const filteredResults = useMemo(() => {
-    const statusOrder = ['NEW', 'MISMATCH', 'UNCHANGED', 'REMOVED'];
-    const term = searchTerm.toLowerCase();
+  const deferredSearchTerm = useDeferredValue(debouncedTerm);
+  const fallbackFilteredResults = useMemo(() => {
+    // Fallback path for environments where Web Workers are unavailable.
+    if (workerReady) return [];
 
-    return results
-      .filter(row => {
-        const matchesSearch = [row.plaId, row.baseLocation, row.remarks, row.nmsName]
+    const term = String(deferredSearchTerm || '').trim().toLowerCase();
+    const statusOrder = ['NEW', 'MISMATCH', 'UNCHANGED', 'REMOVED'];
+    const statusFiltered = filterStatus === 'ALL'
+      ? results
+      : results.filter((row) => row.matchStatus === filterStatus);
+
+    return statusFiltered
+      .filter((row) => {
+        if (!term) return true;
+        const searchable = [row.plaId, row.baseLocation, row.remarks, row.nmsName]
           .filter(Boolean)
-          .some(value => value.toString().toLowerCase().includes(term));
-        const matchesStatus = filterStatus === 'ALL' ? true : row.matchStatus === filterStatus;
-        return matchesSearch && matchesStatus;
+          .map((value) => String(value).toLowerCase())
+          .join(' ');
+        return searchable.includes(term);
       })
       .sort((a, b) => {
         const orderA = statusOrder.indexOf(a.matchStatus);
         const orderB = statusOrder.indexOf(b.matchStatus);
         if (orderA !== orderB) return orderA - orderB;
-
-        // Sort by baseLocation so physical sites stay grouped together
-        const baseA = a.baseLocation || "";
-        const baseB = b.baseLocation || "";
+        const baseA = a.baseLocation || '';
+        const baseB = b.baseLocation || '';
         const baseCompare = baseA.localeCompare(baseB, undefined, { numeric: true, sensitivity: 'base' });
-        
-        // If same base location, sort by the specific tech name
-        if (baseCompare === 0) return (a.nmsName || "").localeCompare(b.nmsName || "");
+        if (baseCompare === 0) return (a.nmsName || '').localeCompare(b.nmsName || '');
         return baseCompare;
       });
-  }, [results, searchTerm, filterStatus]);
+  }, [results, filterStatus, deferredSearchTerm, workerReady]);
+
+  useEffect(() => {
+    if (!workerReady || !filterWorkerRef.current) return;
+    filterWorkerRef.current.postMessage({ type: 'INIT_STORM', rows: results });
+  }, [results, workerReady]);
+
+  useEffect(() => {
+    if (!workerReady || !filterWorkerRef.current) return;
+    const requestId = ++filterRequestIdRef.current;
+    const term = String(deferredSearchTerm || '');
+    workerPerfRef.current.set(requestId, {
+      startedAt: performance.now(),
+      rowCount: results.length,
+      term,
+      filterStatus
+    });
+    setIsWorkerBusy(true);
+    filterWorkerRef.current.postMessage({
+      type: 'QUERY_STORM',
+      requestId,
+      term,
+      filterStatus
+    });
+  }, [workerReady, deferredSearchTerm, filterStatus, results.length]);
+
+  const filteredResults = useMemo(() => {
+    if (!workerReady) return fallbackFilteredResults;
+    return workerFilteredIndices
+      .map((index) => results[index])
+      .filter(Boolean);
+  }, [workerReady, fallbackFilteredResults, workerFilteredIndices, results]);
+
+  const isSearchUpdating = isSearchPending || deferredSearchTerm !== debouncedTerm || isWorkerBusy;
 
   const getPreviewLabel = (status) => {
     switch(status) {
@@ -544,6 +655,80 @@ export default function SMDashboard() {
     }
   };
 
+  const VirtualizedRow = ({ index, style }) => {
+    const row = filteredResults[index];
+    if (!row) return null;
+
+    const isExactRow = selectedSite?.nmsName === row.nmsName;
+    const isSameGroup = selectedSite?.baseLocation === row.baseLocation && !isExactRow;
+
+    const nextRow = filteredResults[index + 1];
+    const prevRow = filteredResults[index - 1];
+    const isLastOfGroup = !nextRow || nextRow.baseLocation !== row.baseLocation;
+    const isFirstOfGroup = !prevRow || prevRow.baseLocation !== row.baseLocation;
+
+    const rowStyle = {
+      ...style,
+      display: 'flex',
+      alignItems: 'center',
+      padding: '0 20px',
+      boxSizing: 'border-box',
+      cursor: 'pointer',
+      transition: 'background-color 0.2s',
+      borderBottom: isLastOfGroup
+        ? (isDarkMode ? '2px solid var(--border-color)' : '2px solid rgba(15, 23, 42, 0.18)')
+        : (isDarkMode ? '1px solid rgba(255,255,255,0.08)' : '1px solid rgba(15, 23, 42, 0.14)'),
+      fontSize: '0.9rem'
+    };
+
+    if (isExactRow) rowStyle.backgroundColor = 'rgba(0, 123, 255, 0.2)';
+    else if (isSameGroup) rowStyle.backgroundColor = 'rgba(128, 128, 128, 0.15)';
+
+    const columnStyle = {
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      paddingRight: '15px',
+      boxSizing: 'border-box'
+    };
+
+    return (
+      <div
+        style={rowStyle}
+        className="row-hover"
+        onClick={() => {
+          const lat = parseFloat(row.lat);
+          const lng = parseFloat(row.lng);
+          setSelectedSite({ lat, lng, id: row.plaId, baseLocation: row.baseLocation, nmsName: row.nmsName, zoom: 18 });
+          setSelectedRowDetails(row);
+        }}
+      >
+        <div style={{ ...columnStyle, width: '12%', fontWeight: 'bold' }}>
+          {isFirstOfGroup ? (row.plaId === 'NEW_SITE' ? 'N/A' : row.plaId) : ''}
+        </div>
+        <div style={{ ...columnStyle, width: '12%' }}>
+          {isFirstOfGroup && (
+            <span className={`status-badge ${row.matchStatus.toLowerCase()}`}>
+              {row.matchStatus}
+            </span>
+          )}
+        </div>
+        <div style={{ ...columnStyle, width: '19%', fontWeight: '500' }}>
+          {isFirstOfGroup ? row.baseLocation : ''}
+        </div>
+        <div style={{ ...columnStyle, width: '12%', fontWeight: 'bold', color: row.techGen?.includes('5G') ? '#28a745' : (row.techGen?.includes('4G') ? '#007bff' : '#666') }}>
+          {row.techGen}
+        </div>
+        <div style={{ ...columnStyle, width: '25%', fontFamily: 'monospace', color: '#1a73e8', fontWeight: 'bold' }}>
+          {row.nmsName}
+        </div>
+        <div style={{ ...columnStyle, width: '20%', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+          {isFirstOfGroup ? row.remarks : ''}
+        </div>
+      </div>
+    );
+  };
+
   const handleNavigate = (path) => {
     setIsNavigating(true);
     setTimeout(() => {
@@ -551,7 +736,7 @@ export default function SMDashboard() {
     }, 1000); 
   };
 
-  // 🚀 1. ALL VARIABLES MUST BE DEFINED FIRST
+  // ÃƒÂ°Ã…Â¸Ã…Â¡Ã¢â€šÂ¬ 1. ALL VARIABLES MUST BE DEFINED FIRST
   const currentUserName = userInfo?.displayName || userInfo?.name || "Unknown User";
   const currentUserEmail = userInfo?.userId || "user@globe.com.ph"; 
   
@@ -566,203 +751,37 @@ export default function SMDashboard() {
 
   const myProcessedData = storedData ? storedData.filter(item => item.metadata?.engineerName === engineerName) : [];
 
-  // 🚀 2. HEADER ACTIONS CREATED SECOND (Now it can safely read the variables above!)
-  const headerActions = (
-    <div className="header-actions" style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', paddingLeft: '16px' }}>
-      <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', minWidth: 0, maxWidth: '280px' }}>
-        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', lineHeight: 1.2 }}>
-          Last Modified:
-        </span>
-        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {lastModifiedName ? `${lastModifiedTimestamp} | ${lastModifiedName}` : lastModifiedTimestamp}
-        </span>
-      </div>
+  // ÃƒÂ°Ã…Â¸Ã…Â¡Ã¢â€šÂ¬ 2. HEADER ACTIONS CREATED SECOND (Now it can safely read the variables above!)
+const exportOptions = [
+  { label: 'Storm Masterlist', value: 'ALL' },
+  { label: 'New Sites Only', value: 'NEW' },
+  { label: 'Removed Only', value: 'REMOVED' },
+  { label: 'Mismatches Only', value: 'MISMATCH' },
+  { label: 'Unchanged Only', value: 'UNCHANGED' }
+];
 
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 0, flex: 1 }} />
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-        <div className="export-dropdown-container" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setShowExportMenu(false); }} tabIndex={-1} style={{ position: 'relative' }}>
-          <button className="btn theme-toggle" onClick={() => setShowExportMenu(!showExportMenu)} disabled={results?.length === 0} style={{
-            width: '36px', height: '36px', borderRadius: '50%', padding: 0,
-            background: 'var(--bg-input)', border: '1px solid var(--border-light)',
-            color: 'var(--text-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            cursor: results?.length === 0 ? 'not-allowed' : 'pointer',
-            opacity: results?.length === 0 ? 0.5 : 1, transition: 'all 0.2s ease', outline: 'none'
-          }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 5v9" />
-              <polyline points="8 11 12 15 16 11" />
-              <path d="M6 18h12" />
-            </svg>
-          </button>
-          {showExportMenu && (
-            <div className="export-menu" style={{ position: 'absolute', top: '110%', left: 0, zIndex: 50 }}>
-              <button onClick={() => handleSpecificExport('ALL')}>Storm Masterlist</button>
-              <button onClick={() => handleSpecificExport('NEW')}>New Sites Only</button>
-              <button onClick={() => handleSpecificExport('REMOVED')}>Removed Only</button>
-              <button onClick={() => handleSpecificExport('MISMATCH')}>Mismatches Only</button>
-              <button onClick={() => handleSpecificExport('UNCHANGED')}>Unchanged Only</button>
-            </div>
-          )}
-        </div>
-        <button className="btn theme-toggle" onClick={toggleTheme} title="Toggle Theme" style={{
-          width: '36px', height: '36px', borderRadius: '50%', padding: 0,
-          background: 'var(--bg-input)', border: '1px solid var(--border-light)',
-          color: 'var(--text-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          cursor: 'pointer', transition: 'all 0.2s ease', outline: 'none'
-        }}>
-          {isDarkMode ? (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
-          ) : (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
-          )}
-        </button>
-        
-        <div style={{ width: '1px', height: '24px', background: 'rgba(128, 128, 128, 0.4)' }} />
-        
-        {/* 🚀 THE GOOGLE-STYLE PROFILE DROPDOWN */}
-        <div style={{ position: 'relative' }}>
-          
-          {/* TRIGGER BUTTON */}
-          <button 
-            className="user-profile-trigger"
-            onClick={() => setShowUserDropdown(!showUserDropdown)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: '10px', background: 'transparent',
-              border: 'none', outline: 'none', cursor: 'pointer', textAlign: 'left', 
-              padding: '4px 8px', borderRadius: '8px', transition: 'background 0.2s'
-            }}
-          >
-            <div title={engineerName} style={{
-              width: '38px', height: '38px', borderRadius: '50%',
-              background: 'linear-gradient(135deg, var(--brand-purple), #6b21a8)',
-              color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontWeight: 'bold', fontSize: '1.1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
-            }}>
-              {userInitial}
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', lineHeight: '1.2', minWidth: 0 }}>
-              <span style={{ fontWeight: '700', fontSize: '0.85rem', color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '150px' }}>
-                {engineerName}
-              </span>
-              <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '150px' }}>
-                {currentUserEmail}
-              </span>
-            </div>
-          </button>
-
-          {/* THE THEMED DROPDOWN MENU */}
-          {showUserDropdown && (
-            <>
-              {/* Invisible Overlay for closing */}
-              <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999 }} onClick={(e) => { e.stopPropagation(); setShowUserDropdown(false); }} />
-
-              <div style={{ 
-                position: 'absolute', top: '110%', right: 0, zIndex: 1000, width: '360px', 
-                background: 'var(--bg-card)', 
-                backdropFilter: 'var(--glass-blur)',
-                WebkitBackdropFilter: 'var(--glass-blur)',
-                border: '1px solid var(--border-light)', 
-                borderRadius: '24px', boxShadow: 'var(--shadow-hover)', 
-                padding: '16px', color: 'var(--text-primary)', fontFamily: '"Google Sans", Roboto, Arial, sans-serif'
-              }}>
-                
-                {/* Header Row */}
-                <div style={{ position: 'relative', textAlign: 'center', marginBottom: '16px' }}>
-                  <div style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: '500' }}>{currentUserEmail}</div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>Managed by Globe RSC</div>
-                  <button onClick={() => setShowUserDropdown(false)} style={{ position: 'absolute', right: '0', top: '-4px', background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.2rem', outline: 'none' }}>✕</button>
-                </div>
-
-                {/* Big Avatar with Camera Icon */}
-                <div style={{ position: 'relative', width: '76px', height: '76px', margin: '0 auto 12px auto' }}>
-                  <div style={{ 
-                    width: '100%', height: '100%', borderRadius: '50%', background: 'linear-gradient(135deg, var(--brand-purple), #6b21a8)', 
-                    color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '2rem',
-                    boxShadow: '0 4px 10px rgba(0,0,0,0.2)'
-                  }}>
-                    {userInitial}
-                  </div>
-                  {/* Camera Badge Overlay */}
-                  <div style={{ 
-                    position: 'absolute', bottom: '0', right: '0', background: 'var(--bg-input)', borderRadius: '50%', 
-                    width: '24px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid var(--bg-card)' 
-                  }}>
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--text-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
-                  </div>
-                </div>
-
-                {/* Greeting & Manage Button */}
-                <div style={{ textAlign: 'center', fontSize: '1.4rem', marginBottom: '16px', color: 'var(--text-primary)' }}>Hi, {firstName}!</div>
-                <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '24px' }}>
-                 <button 
-                    onClick={() => {
-                      setShowUserDropdown(false);
-                      // Opens the actual Google Workspace account manager in a new tab
-                      window.open('https://myaccount.google.com/', '_blank'); 
-                    }}
-                    className="primary-outline" 
-                    style={{ borderRadius: '100px', padding: '8px 24px', fontSize: '0.85rem', fontWeight: '500', cursor: 'pointer', transition: 'all 0.2s' }}
-                  >
-                    Manage your Google Account
-                  </button>
-                </div>
-
-                {/* Added overflowX: 'hidden' to prevent sideways scrolling */}
-                <div className="custom-scrollbar" style={{ maxHeight: '220px', overflowY: 'auto', overflowX: 'hidden' }}>
-                      {/* 🚀 NOW USING YOUR PERSONAL FILTERED DATA */}
-                      {myProcessedData.length > 0 ? myProcessedData.slice(0, 5).map((item, index) => (
-                        <button 
-                          key={item.id} 
-                          onClick={() => { handleLoadStoredData(item); setShowUserDropdown(false); }} 
-                          className="row-hover"
-                          style={{ 
-                            width: '100%', background: 'transparent', border: 'none', borderBottom: index === Math.min(myProcessedData.length, 5) - 1 ? 'none' : '1px solid var(--border-light)',
-                            padding: '14px 16px', display: 'flex', alignItems: 'center', gap: '16px', cursor: 'pointer', textAlign: 'left', transition: 'background 0.2s' 
-                          }}
-                        >
-                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
-                          
-                          {/* Added paddingRight so the text doesn't touch the scrollbar */}
-                          <div style={{ flex: 1, minWidth: 0, paddingRight: '8px' }}>
-                            <div style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.fileName}</div>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>{new Date(item.uploadDate).toLocaleDateString()} • <span style={{ color: 'var(--color-info)' }}>{item.processedCount ?? item.metadata?.processedRecords ?? 0} rows</span></div>
-                          </div>
-                        </button>
-                      )) : (
-                        <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                          You haven't processed any files recently.
-                        </div>
-                      )}
-                    </div>
-
-                {/* Footer Links */}
-                <div style={{ textAlign: 'center', marginTop: '16px', padding: '12px 0 4px 0', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                  <a
-                    href="https://policies.google.com/privacy?hl=en"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ color: 'var(--text-secondary)', textDecoration: 'none' }}
-                  >
-                    Privacy Policy
-                  </a>
-                  &nbsp;•&nbsp;
-                  <a
-                    href="https://policies.google.com/terms?hl=en"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ color: 'var(--text-secondary)', textDecoration: 'none' }}
-                  >
-                    Terms of Service
-                  </a>
-                </div>
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+const headerActions = (
+  <DashboardHeaderActions
+    lastModifiedText={lastModifiedName ? `${lastModifiedTimestamp} | ${lastModifiedName}` : lastModifiedTimestamp}
+    exportDisabled={results?.length === 0}
+    showExportMenu={showExportMenu}
+    onToggleExport={() => setShowExportMenu(!showExportMenu)}
+    onCloseExport={() => setShowExportMenu(false)}
+    exportOptions={exportOptions}
+    onSelectExport={(value) => handleSpecificExport(value)}
+    isDarkMode={isDarkMode}
+    onToggleTheme={toggleTheme}
+    showUserDropdown={showUserDropdown}
+    onToggleUserDropdown={() => setShowUserDropdown(!showUserDropdown)}
+    onCloseUserDropdown={() => setShowUserDropdown(false)}
+    userName={engineerName}
+    userEmail={currentUserEmail}
+    userInitial={userInitial}
+    firstName={firstName}
+    recentItems={myProcessedData}
+    onLoadRecentItem={handleLoadStoredData}
+  />
+);
 
   return (
     <DashboardLayout
@@ -800,7 +819,7 @@ export default function SMDashboard() {
                   </div>
                 </div>
 
-                {/* 🚀 3. marginTop: 'auto' forces this button to the absolute bottom of the empty space! */}
+                {/* ÃƒÂ°Ã…Â¸Ã…Â¡Ã¢â€šÂ¬ 3. marginTop: 'auto' forces this button to the absolute bottom of the empty space! */}
                 <button className="btn primary-filled scan-btn full-width" onClick={handleScan} disabled={isLoading} style={{ marginTop: 'auto', padding: '12px' }}>
                   <img src={search} alt="Scan" className="btn-icon" style={{ width: '16px' }} />
                   <span>{isLoading ? "Scanning..." : "Scan Files"}</span>
@@ -866,7 +885,7 @@ export default function SMDashboard() {
                       <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '5px' }}>Last Data Modification:</div>
                       <div style={{ fontWeight: 'bold', color: 'var(--color-danger)' }}>{lastModifiedName}</div>
                       <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                        {lastModifiedInfo.action} â€¢ {lastModifiedInfo.fileName}
+                        {lastModifiedInfo.action} • {lastModifiedInfo.fileName}
                       </div>
                       <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
                         {new Date(lastModifiedInfo.timestamp).toLocaleString()}
@@ -889,7 +908,7 @@ export default function SMDashboard() {
                               </div>
                             </div>
                             
-                            {/* 🚀 ADDED THE ENGINEER NAME DISPLAY HERE */}
+                            {/* ÃƒÂ°Ã…Â¸Ã…Â¡Ã¢â€šÂ¬ ADDED THE ENGINEER NAME DISPLAY HERE */}
                             <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '5px' }}>
                               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
                               Ran by: <span style={{color: 'var(--text-primary)', fontWeight: '600'}}>{item.metadata?.engineerName || "Workspace User"}</span>
@@ -909,7 +928,7 @@ export default function SMDashboard() {
                       </div>
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '200px', color: 'var(--text-secondary)' }}>
-                        <div style={{ fontSize: '2rem', marginBottom: '10px' }}>📁</div>
+                        <div style={{ fontSize: '2rem', marginBottom: '10px' }}>[📁]</div>
                         <div>No stored data found</div>
                         <div style={{ fontSize: '0.8rem', marginTop: '5px' }}>Process some data to see it here</div>
                       </div>
@@ -924,7 +943,7 @@ export default function SMDashboard() {
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
                   </button>
                   <h3 style={{ margin: 0, fontSize: '1.2rem', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-primary)' }}>
-                    <span style={{ fontSize: '1.4rem' }}>âœ¨</span> veRiSynC AI
+                    <span style={{ fontSize: '1.4rem' }}>AI</span> veRiSynC AI
                   </h3>
                 </div>
                 
@@ -953,7 +972,7 @@ export default function SMDashboard() {
                   
                   {isAiLoadingVisible && (
                     <div style={{ alignSelf: 'flex-start', background: 'var(--bg-input)', padding: '10px 14px', borderRadius: '16px 16px 16px 0', border: '1px solid var(--border-light)' }}>
-                      <span style={{ display: 'inline-block', animation: 'logo-pulse 1s infinite', fontSize: '0.85rem' }}>ðŸ¤– Thinking...</span>
+                      <span style={{ display: 'inline-block', animation: 'logo-pulse 1s infinite', fontSize: '0.85rem' }}>Thinking...</span>
                     </div>
                   )}
                 </div>
@@ -1005,7 +1024,7 @@ export default function SMDashboard() {
           <div className="sidebar-map-wrapper" style={{ display: showHistoryPanel ? 'none' : 'flex' }}>
             <div className="mini-map">
               
-              {/* 🚀 MOVED INSIDE THE MAP */}
+              {/* ÃƒÂ°Ã…Â¸Ã…Â¡Ã¢â€šÂ¬ MOVED INSIDE THE MAP */}
               <div className="map-floating-header">
                 <span className="floating-title">Site Visualizer</span>
                 <button className="floating-btn" onClick={() => setShowBigMap(true)} aria-label="Expand map">
@@ -1038,7 +1057,7 @@ export default function SMDashboard() {
               }
             }}
           >
-            <span style={{ fontSize: '1rem', transform: 'rotate(90deg)' }}>📁</span>
+            <span style={{ fontSize: '0.7rem', transform: 'rotate(90deg)' }}>[📁]</span>
             <span className="history-tab-text">{showHistoryPanel ? "CLOSE" : "HISTORY"}</span>
           </div>
 
@@ -1053,7 +1072,7 @@ export default function SMDashboard() {
               }
             }}
           >
-            <span style={{ fontSize: '1rem', transform: 'rotate(90deg)' }}>{showAiPanel ? "✓" : "</>"}</span>
+            <span style={{ fontSize: '1rem', transform: 'rotate(90deg)' }}>{showAiPanel ? "OK" : "</>"}</span>
             <span className="ai-tab-text">{showAiPanel ? "CLOSE" : "veRiSynC AI"}</span>
           </div>
 
@@ -1098,21 +1117,22 @@ export default function SMDashboard() {
                 className="preview-dropdown-container" 
                 onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setShowPreviewMenu(false); }} 
                 tabIndex={-1}
+                style={{ flex: '1 1 auto', minWidth: 0 }}
               >
                <button 
                           className="preview-toggle-btn" 
                           onClick={() => setShowPreviewMenu(!showPreviewMenu)}
                           disabled={results.length === 0}
-                          style={{ opacity: results.length === 0 ? 0.5 : 1, cursor: results.length === 0 ? 'not-allowed' : 'pointer', outline: 'none' }}
+                          style={{ opacity: results.length === 0 ? 0.5 : 1, cursor: results.length === 0 ? 'not-allowed' : 'pointer', outline: 'none', maxWidth: '100%' }}
                         >
-                          {/* ðŸš€ First Span: "Preview Data:" */}
+                          {/* ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€¦Ã‚Â¡ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ First Span: "Preview Data:" */}
                           <span style={{ color: isDarkMode ? '#ffffff' : 'var(--text-primary)' }}>
                             Preview Data: 
                           </span> 
                           
                           {' '} {/* Adds a tiny space between the words */}
 
-                          {/* ðŸš€ Second Span: The Dynamic Label */}
+                          {/* ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€¦Ã‚Â¡ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Second Span: The Dynamic Label */}
                           <span style={{ 
                             fontWeight: 'bold', 
                             color: isDarkMode ? '#ffffff' : 'var(--brand-purple)' 
@@ -1132,92 +1152,54 @@ export default function SMDashboard() {
                 )}
               </div>
 
-              <input 
-                type="text" 
-                className="search-bar" 
-                placeholder="Search ID or Name..." 
-                value={searchTerm} 
-                onChange={(e) => setSearchTerm(e.target.value)} 
-                disabled={results.length === 0} 
-                style={{ 
-                  opacity: results.length === 0 ? 0.5 : 1, 
-                  cursor: results.length === 0 ? 'not-allowed' : 'text', 
-                }}
-              />
+              <div style={{ position: 'relative', flex: '1 1 240px', minWidth: 0, maxWidth: '320px', width: '100%' }}>
+                <input 
+                  type="text" 
+                  className="search-bar" 
+                  placeholder="Search ID or Name..." 
+                  value={searchTerm} 
+                  onChange={(e) => setSearchTerm(e.target.value)} 
+                  disabled={results.length === 0} 
+                  style={{ 
+                    width: '100%',
+                    boxSizing: 'border-box',
+                    opacity: results.length === 0 ? 0.5 : 1, 
+                    cursor: results.length === 0 ? 'not-allowed' : 'text', 
+                    paddingRight: '92px'
+                  }}
+                />
+                <span style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', fontSize: '0.75rem', color: 'var(--text-secondary)', opacity: isSearchUpdating ? 1 : 0, pointerEvents: 'none', transition: 'opacity 0.12s ease' }}>
+                  Searching...
+                </span>
+              </div>
             </div>
 
             <div className="output-box" style={{ flex: 1, display: 'flex', flexDirection: 'column', backgroundColor: 'var(--bg-primary)' }}>
               {results.length > 0 ? (
-                <div className="table-wrapper">
-                  <table className="result-table">
-                    <thead>
-                      <tr>
-                        <th>PLA_ID</th>
-                        <th>Status</th>
-                        <th>Base Name</th>
-                        <th style={{color: '#1a73e8'}}>Technology</th>
-                        <th style={{color: '#1a73e8'}}>BCF NAME</th>
-                        <th>Remarks</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredResults.map((row, i) => {
-                        // FIX: Group visually using baseLocation instead of plaId
-                        const isExactRow = selectedSite?.nmsName === row.nmsName;
-                        const isSameGroup = selectedSite?.baseLocation === row.baseLocation && !isExactRow;
-                        
-                        let rowStyle = { cursor: "pointer", transition: "background-color 0.2s" };
-                        if (isExactRow) rowStyle.backgroundColor = "rgba(0, 123, 255, 0.2)";
-                        else if (isSameGroup) rowStyle.backgroundColor = "rgba(128, 128, 128, 0.15)";
-
-                        const nextRow = filteredResults[i + 1];
-                        const isLastOfGroup = !nextRow || nextRow.baseLocation !== row.baseLocation;
-                        if (isLastOfGroup) {
-                          rowStyle.borderBottom = isDarkMode
-                            ? "2px solid var(--border-color)"
-                            : "2px solid rgba(15, 23, 42, 0.18)";
-                        }
-
-                        const prevRow = filteredResults[i - 1];
-                        const isFirstOfGroup = !prevRow || prevRow.baseLocation !== row.baseLocation;
-
-                        return (
-                          <tr key={`${row.baseLocation}-${row.nmsName}-${i}`} className="row-hover" style={rowStyle}
-                            onClick={() => {
-                              const lat = parseFloat(row.lat);
-                              const lng = parseFloat(row.lng);
-                              setSelectedSite({ lat, lng, id: row.plaId, baseLocation: row.baseLocation, nmsName: row.nmsName, zoom: 18 });
-                              setSelectedRowDetails(row);
-                            }}
-                          >
-                            <td className="font-bold">
-                              {isFirstOfGroup ? (row.plaId === "NEW_SITE" ? "N/A" : row.plaId) : ""}
-                            </td>
-                            <td>
-                              {isFirstOfGroup && (
-                                <span className={`status-badge ${row.matchStatus.toLowerCase()}`}>
-                                  {row.matchStatus}
-                                </span>
-                              )}
-                            </td>
-                            <td style={{ fontWeight: '500' }}>{isFirstOfGroup ? row.baseLocation : ""}</td>
-                            <td style={{ fontWeight: 'bold', color: row.techGen?.includes('5G') ? '#28a745' : (row.techGen?.includes('4G') ? '#007bff' : '#666') }}>
-                              {row.techGen}
-                            </td>
-                            <td style={{ fontFamily: 'monospace', color: '#1a73e8', fontWeight: 'bold' }}>
-                              {row.nmsName}
-                            </td>
-                            <td style={{ fontSize: '0.75rem', color: 'var(--text-secondary)'}}>
-                              {isFirstOfGroup ? row.remarks : ""}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                <div className="table-wrapper" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                  <div style={{ display: 'flex', padding: '16px 20px', fontWeight: 600, borderBottom: isDarkMode ? '1px solid rgba(255, 255, 255, 0.08)' : '1px solid rgba(15, 23, 42, 0.18)', background: isDarkMode ? 'linear-gradient(180deg, rgba(17, 28, 68, 0.95) 0%, rgba(17, 28, 68, 0.85) 100%)' : 'linear-gradient(180deg, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.75) 100%)', color: 'var(--text-secondary)', textTransform: 'uppercase', fontSize: '0.85rem' }}>
+                    <div style={{ width: '12%', paddingRight: '15px' }}>PLA_ID</div>
+                    <div style={{ width: '12%', paddingRight: '15px' }}>Status</div>
+                    <div style={{ width: '19%', paddingRight: '15px' }}>Base Name</div>
+                    <div style={{ width: '12%', paddingRight: '15px', color: '#1a73e8' }}>Technology</div>
+                    <div style={{ width: '25%', paddingRight: '15px', color: '#1a73e8' }}>BCF NAME</div>
+                    <div style={{ width: '20%', paddingRight: '15px' }}>Remarks</div>
+                  </div>
+                  <div ref={listContainerRef} style={{ flex: 1, width: '100%', overflow: 'hidden' }}>
+                    <List
+                      height={mainListSize.height}
+                      itemCount={filteredResults.length}
+                      itemSize={58}
+                      width={mainListSize.width}
+                      overscanCount={10}
+                      className="custom-scrollbar"
+                    >
+                      {VirtualizedRow}
+                    </List>
+                  </div>
                 </div>
               ) : (
-                // ðŸš€ ENTERPRISE SKELETON LOADER FOR STORM MASTER LIST
+                // ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€¦Ã‚Â¡ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ ENTERPRISE SKELETON LOADER FOR STORM MASTER LIST
                 <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
                   {[...Array(8)].map((_, i) => (
                     <div key={i} style={{ display: 'flex', alignItems: 'center', padding: '0 20px', height: '60px', borderBottom: "1px solid rgba(128,128,128,0.05)", boxSizing: 'border-box', opacity: 0.6 }}>
@@ -1242,7 +1224,7 @@ export default function SMDashboard() {
           <div className="theme-modal-card" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
             <div className="theme-modal-header">
               <h3>{themeModal.title}</h3>
-              <button className="theme-modal-close" onClick={handleThemeModalCancel} aria-label="Close">×</button>
+              <button className="theme-modal-close" onClick={handleThemeModalCancel} aria-label="Close">x</button>
             </div>
             <div className="theme-modal-body">
               <p>{themeModal.message}</p>
@@ -1286,3 +1268,5 @@ export default function SMDashboard() {
     </DashboardLayout>
   );
 }
+
+

@@ -339,11 +339,15 @@ body.dark-mode .details-header {
 ========================================================= */
 .table-toolbar {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
   padding: 1.5rem 2rem;
   background-color: var(--brand-gradient);
   color: var(--text-primary);
+  min-width: 0;
+  overflow: hidden;
 }
 
 .table-toolbar h2, .table-toolbar .search-bar, .table-toolbar button {

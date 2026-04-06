@@ -10,7 +10,8 @@ const CONFIG = {
   DATA_SHEET_NAME: 'UploadedData',
   USERS_SHEET_NAME: 'Users',
   LAST_MODIFIED_SHEET_NAME: 'LastModified',
-  DRIVE_FOLDER_NAME: 'GLOBE RSC'
+  DRIVE_FOLDER_NAME: 'GLOBE RSC',
+  ALLOW_DOMAIN_LINK_SHARING: false
 };
 
 // --- DRIVE STORAGE HELPERS (THE FIX) ---
@@ -25,8 +26,18 @@ function getOrCreateDataFolder() {
 
 function saveJsonToDrive(fileName, dataObj) {
   if (!dataObj || (Array.isArray(dataObj) && dataObj.length === 0)) return "";
+  
   const folder = getOrCreateDataFolder();
   const file = folder.createFile(fileName, JSON.stringify(dataObj), MimeType.PLAIN_TEXT);
+
+  if (CONFIG.ALLOW_DOMAIN_LINK_SHARING) {
+    try {
+      file.setSharing(DriveApp.Access.DOMAIN_WITH_LINK, DriveApp.Permission.VIEW);
+    } catch (e) {
+      Logger.log('Domain link sharing not applied: ' + e.message);
+    }
+  }
+
   return file.getId(); // Return only the ID for the spreadsheet
 }
 
@@ -128,9 +139,11 @@ function initializeSpreadsheet() {
  */
 function storeUploadedData(fileName, dataType, rawData, processedData, metadata) {
   const lock = LockService.getScriptLock();
+  let lockAcquired = false;
   
   try {
-    if (!lock.tryLock(15000)) {
+    lockAcquired = lock.tryLock(15000);
+    if (!lockAcquired) {
       return { success: false, error: 'Database is currently busy serving another user. Please try saving again in a few seconds.' };
     }
 
@@ -153,7 +166,7 @@ function storeUploadedData(fileName, dataType, rawData, processedData, metadata)
     if (metadata) {
       metadata.engineerName = actualDisplayName;
     }
-    
+
     // FILE NAMING SYSTEM
     // 1. Clean the engineer's name (e.g., "Adrian Bastes" becomes "Adrian_Bastes")
     const safeName = actualDisplayName.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
@@ -195,7 +208,7 @@ function storeUploadedData(fileName, dataType, rawData, processedData, metadata)
   } catch (error) {
     return { success: false, error: 'Failed to store data: ' + error.message };
   } finally {
-    lock.releaseLock();
+    if (lockAcquired) lock.releaseLock();
   }
 }
 
@@ -204,7 +217,7 @@ function getUserUploadedData(limit = 50, dataType = '') {
     const userInfo = getUserInfo();
     if (!userInfo.success) return userInfo;
 
-    const userRows = getUserDataRows(dataType);
+    const userRows = getUserDataRows(userInfo.data.userId, dataType);
     if (userRows.length === 0) return { success: true, data: [] };
 
     const userData = userRows.slice(0, limit).map(row => ({
@@ -225,7 +238,21 @@ function getUserUploadedDataSummary(limit = 50, dataType = '') {
     const userInfo = getUserInfo();
     if (!userInfo.success) return userInfo;
 
-    const userRows = getUserDataRows(dataType);
+    const userRows = getUserDataRows(userInfo.data.userId, dataType);
+    return { success: true, data: userRows.slice(0, limit).map(buildStoredDataSummary) };
+  } catch (error) {
+    return { success: false, error: 'Failed to retrieve data summary: ' + error.message };
+  }
+}
+
+function getUploadedDataSummary(limit = 50, dataType = '', includeAll = false) {
+  try {
+    const userInfo = getUserInfo();
+    if (!userInfo.success) return userInfo;
+
+    const userRows = includeAll
+      ? getUserDataRows(null, dataType, { includeAll: true })
+      : getUserDataRows(userInfo.data.userId, dataType);
     return { success: true, data: userRows.slice(0, limit).map(buildStoredDataSummary) };
   } catch (error) {
     return { success: false, error: 'Failed to retrieve data summary: ' + error.message };
@@ -237,7 +264,7 @@ function getUploadedDataById(dataId) {
     const userInfo = getUserInfo();
     if (!userInfo.success) return userInfo;
 
-    const userRows = getUserDataRows();
+    const userRows = getUserDataRows(userInfo.data.userId);
     const row = userRows.find(item => item[0] === dataId);
     if (!row) return { success: false, error: 'Stored data not found or access denied' };
 
@@ -260,7 +287,7 @@ function getLatestUserUploadedData(dataType = '') {
     const userInfo = getUserInfo();
     if (!userInfo.success) return userInfo;
 
-    const userRows = getUserDataRows(dataType);
+    const userRows = getUserDataRows(userInfo.data.userId, dataType);
     if (userRows.length === 0) return { success: true, data: null };
 
     return getUploadedDataById(userRows[0][0]);
@@ -337,15 +364,20 @@ function getLastModifiedInfo(dataType = '') {
 
 function deleteUploadedData(dataId) {
   const lock = LockService.getScriptLock();
+  let lockAcquired = false;
   try {
-    if (!lock.tryLock(10000)) return { success: false, error: 'Database busy.' };
+    lockAcquired = lock.tryLock(10000);
+    if (!lockAcquired) return { success: false, error: 'Database busy.' };
+
+    const userInfo = getUserInfo();
+    if (!userInfo.success) return userInfo;
 
     const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = spreadsheet.getSheetByName(CONFIG.DATA_SHEET_NAME);
     const data = sheet.getDataRange().getValues();
 
     for (let i = 1; i < data.length; i++) {
-      if (data[i][0] === dataId) {
+      if (data[i][0] === dataId && data[i][1] === userInfo.data.userId) {
         //Delete from Drive first
         deleteFileFromDrive(data[i][5]);
         deleteFileFromDrive(data[i][6]);
@@ -356,7 +388,7 @@ function deleteUploadedData(dataId) {
     }
     return { success: false, error: 'Data not found' };
   } catch (error) { return { success: false, error: 'Failed to delete data: ' + error.message }; }
-  finally { lock.releaseLock(); }
+  finally { if (lockAcquired) lock.releaseLock(); }
 }
 
 // --- WEB APP ENDPOINTS ---
@@ -376,7 +408,7 @@ function doPost(e) {
     switch (action) {
       case 'storeData': return ContentService.createTextOutput(JSON.stringify(storeUploadedData(data.fileName, data.dataType, data.rawData, data.processedData, data.metadata))).setMimeType(ContentService.MimeType.JSON);
       case 'getData': return ContentService.createTextOutput(JSON.stringify(getUserUploadedData(data.limit, data.dataType))).setMimeType(ContentService.MimeType.JSON);
-      case 'getDataSummary': return ContentService.createTextOutput(JSON.stringify(getUserUploadedDataSummary(data.limit, data.dataType))).setMimeType(ContentService.MimeType.JSON);
+      case 'getDataSummary': return ContentService.createTextOutput(JSON.stringify(getUploadedDataSummary(data.limit, data.dataType, parseBoolean(data.includeAll)))).setMimeType(ContentService.MimeType.JSON);
       case 'getDataById': return ContentService.createTextOutput(JSON.stringify(getUploadedDataById(data.dataId))).setMimeType(ContentService.MimeType.JSON);
       case 'getLatestData': return ContentService.createTextOutput(JSON.stringify(getLatestUserUploadedData(data.dataType))).setMimeType(ContentService.MimeType.JSON);
       case 'deleteData': return ContentService.createTextOutput(JSON.stringify(deleteUploadedData(data.dataId))).setMimeType(ContentService.MimeType.JSON);
@@ -402,15 +434,20 @@ function safeJsonParse(value, fallback) {
   try { return JSON.parse(value || JSON.stringify(fallback)); } catch (error) { return fallback; }
 }
 
-function getUserDataRows(dataType = '') {
+function parseBoolean(value) {
+  return value === true || value === 'true' || value === 1 || value === '1';
+}
+
+function getUserDataRows(userId, dataType = '', options = {}) {
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = spreadsheet.getSheetByName(CONFIG.DATA_SHEET_NAME);
   const data = sheet.getDataRange().getValues();
 
   if (data.length <= 1) return [];
+  const includeAll = Boolean(options.includeAll);
 
   return data.slice(1)
-    .filter(row => !dataType || row[4] === dataType)
+    .filter(row => (includeAll || row[1] === userId) && (!dataType || row[4] === dataType))
     .sort((a, b) => new Date(b[2]) - new Date(a[2]));
 }
 
